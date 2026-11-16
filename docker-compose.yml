@@ -1,0 +1,23 @@
+# Local development infrastructure only. Not a production deployment file.
+# Credentials here are development defaults; override them through the
+# environment (or a root-level .env file) if the port or password clashes.
+services:
+  db:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-merchantflow}
+      POSTGRES_USER: ${POSTGRES_USER:-merchantflow}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-merchantflow_dev}
+    ports:
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - merchantflow_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  merchantflow_pgdata:

@@ -1,0 +1,10 @@
+{
+  "name": "MerchantFlow",
+  "short_name": "MerchantFlow",
+  "description": "Affiliate sales, orders and commissions for merchants.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f5f6f4",
+  "theme_color": "#0f5c4a",
+  "icons": [{ "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }]
+}
