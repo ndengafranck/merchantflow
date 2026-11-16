@@ -12,7 +12,7 @@ Each milestone ends with a review before the next begins.
 | Environment configuration and `.env.example` | Done |
 | Lint and format: ruff; ESLint and Prettier | Done |
 | Tests: pytest on PostgreSQL; Vitest | Done |
-| CI workflow (GitHub Actions) | Written; every step rehearsed locally in a clean clone; not yet run on a remote (no repository available) |
+| CI workflow (GitHub Actions) | Done; passing on GitHub |
 | Health check `/api/health/` | Done |
 | README and architecture documents | Done |
 
@@ -48,11 +48,11 @@ Each milestone ends with a review before the next begins.
 | R1 | Workspace guard is structural; route coverage and isolation contract | Done | `tests/test_architecture.py`, `tests/test_isolation.py` |
 | R2 | Services re-read and lock the actor; domain errors separated from HTTP | Done | `tests/test_actor_authorization.py` |
 | R3 | SPA routes under `/w/<workspace-id>/` | Done | `frontend/src/App.test.tsx`, `frontend/e2e/workspaces.spec.ts` |
-| R4 | Compose verified; browser tests committed; remote CI run | Compose and browser tests done. **Remote CI not run: no repository or credentials available** | `frontend/e2e/`, see the review document |
+| R4 | Compose verified; browser tests committed; remote CI run | Done | `frontend/e2e/`; [CI run 43927496492](https://github.com/ndengafranck/merchantflow/actions/runs/43927496492): backend 213 passed, frontend 24 passed, e2e 13 passed |
 | R5 | Sessions bound to browser installations; workspace device authorisation | Done | `tests/test_installations.py`, `tests/test_devices.py`, `tests/test_concurrency.py`, `tests/test_migrations.py` |
 
 **Do not start Milestone 2 until** these corrections have been independently
-reviewed and the CI workflow has passed once on a remote.
+reviewed. The CI workflow passes on GitHub.
 
 ### Upgrade notes for an existing database
 

@@ -544,7 +544,7 @@ finding. "Open" findings were outside R1 to R5 and are unchanged.
 | D-02 Races surfacing as server errors | **Fixed for `add_member`** (the actor lock serialises it). `_unique_slug` unchanged | `test_concurrency.py::test_concurrent_add_member_never_surfaces_a_database_error` |
 | D-03 Audit trail incomplete and mutable | **Open** | Before Milestone 4 |
 | D-04 Smaller schema points | **Open** | |
-| T-01 Evidence not reproducible | **Partly fixed** (R4): browser suite committed, Compose verified. **Remote CI still not run** | `frontend/e2e/` |
+| T-01 Evidence not reproducible | **Fixed** (R4): browser suite committed, Compose verified, all three CI jobs pass on GitHub | `frontend/e2e/`, [CI run 43927496492](https://github.com/ndengafranck/merchantflow/actions/runs/43927496492) |
 | T-02 Missing test categories | **Mostly fixed**: route coverage, concurrency, session lifecycle and isolation contract are in the suite. Management commands, admin and production-settings tests remain | |
 | P-01 PWA metadata | **Open** | |
 | O-01 No deployment path | **Open** | Blocks a pilot |
