@@ -24,7 +24,7 @@ if not DEBUG and SECRET_KEY.startswith("insecure-"):
 ALLOWED_HOSTS = env.list("DJANGO_ALLOWED_HOSTS", default=[])
 
 INSTALLED_APPS = [
-    "django.contrib.admin",
+    "apps.common.admin_config.MerchantFlowAdminConfig",  # django.contrib.admin, protected
     "django.contrib.auth",
     "django.contrib.contenttypes",
     "django.contrib.sessions",

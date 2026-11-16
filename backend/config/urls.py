@@ -13,8 +13,12 @@ api_v1 = [
 urlpatterns = [
     path("api/health/", HealthCheckView.as_view(), name="health"),
     path("api/v1/", include(api_v1)),
-    path("admin/", admin.site.urls),
 ]
+
+# The admin is the most privileged surface. It is off unless explicitly
+# enabled, and its path is configurable so it can be kept off the public URL.
+if settings.ADMIN_ENABLED:
+    urlpatterns.append(path(settings.ADMIN_PATH, admin.site.urls))
 
 if settings.API_DOCS_ENABLED:
     urlpatterns += [
