@@ -186,9 +186,13 @@ def transfer_ownership(*, actor: WorkspaceMembership, new_owner_id) -> Workspace
     )
     if successor is None:
         raise DomainError("Member not found in this workspace.", code="member_not_found")
+    # Lock the successor's account too, so a concurrent deactivation of that
+    # account either finishes first (and is seen here) or waits and then sees
+    # the new ownership (and is refused): accounts.services.deactivate_user.
+    successor_user = User.objects.select_for_update().get(pk=successor.user_id)
     if successor.pk == current.pk:
         raise ConflictError("This member already owns the workspace.", code="already_owner")
-    if successor.status != MembershipStatus.ACTIVE or not successor.user.is_active:
+    if successor.status != MembershipStatus.ACTIVE or not successor_user.is_active:
         raise DomainError("The new owner must be an active member.", code="successor_inactive")
 
     # Demote before promoting: the single-owner constraint is checked per statement.

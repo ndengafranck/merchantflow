@@ -1,6 +1,9 @@
 from django.contrib.auth.password_validation import validate_password
 from django.db import transaction
 
+from apps.audit.services import record_event
+from apps.common.exceptions import DomainError
+
 from .models import User, normalize_email
 
 
@@ -33,3 +36,26 @@ def owned_workspace_names(user: User) -> list[str]:
         .order_by("workspace__name")
         .values_list("workspace__name", flat=True)
     )
+
+
+@transaction.atomic
+def deactivate_user(*, user_id, by: User | None, reason: str) -> User:
+    """Suspend an account platform-wide. Its sessions stop working at once.
+
+    Refused while the account owns a non-archived workspace: ownership must be
+    transferred first, or the workspace would have an owner who cannot sign in.
+    The database enforces the same rule. Idempotent.
+    """
+    user = User.objects.select_for_update().get(pk=user_id)
+    if not user.is_active:
+        return user
+    owned = owned_workspace_names(user)
+    if owned:
+        raise DomainError(
+            "This account owns " + ", ".join(owned) + ". Transfer ownership first.",
+            code="owner_cannot_be_deactivated",
+        )
+    user.is_active = False
+    user.save(update_fields=["is_active"])
+    record_event(action="user.deactivated", target=user, actor=by, metadata={"reason": reason})
+    return user

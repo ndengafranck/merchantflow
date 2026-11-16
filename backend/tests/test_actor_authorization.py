@@ -84,7 +84,9 @@ def test_former_owner_cannot_act_with_a_stale_membership_object(shop, make_user,
 @pytest.mark.parametrize("operation", OPERATIONS)
 @pytest.mark.parametrize(
     "how",
-    ["membership_suspended", "membership_removed", "user_deactivated", "workspace_suspended"],
+    # "user_deactivated" is covered below with a manager: since F-11 an owner's
+    # account cannot be deactivated at all (tests/test_owner_integrity.py).
+    ["membership_suspended", "membership_removed", "workspace_suspended"],
 )
 def test_actor_who_lost_access_is_refused_even_with_an_old_object(shop, make_user, operation, how):
     operations = sensitive_operations(shop, make_user)
@@ -95,14 +97,22 @@ def test_actor_who_lost_access_is_refused_even_with_an_old_object(shop, make_use
         WorkspaceMembership.objects.filter(pk=actor.pk).update(
             status=how.removeprefix("membership_")
         )
-    elif how == "user_deactivated":
-        User.objects.filter(pk=actor.user_id).update(is_active=False)
     else:
         Workspace.objects.filter(pk=shop.workspace.pk).update(status="suspended")
 
     with pytest.raises(NotPermittedError):
         operations[operation](actor)
     assert_nothing_happened(shop, operation)
+
+
+def test_deactivated_account_is_refused_even_with_an_old_object(shop, make_user):
+    """A manager may revoke an attendant's device; a deactivated one may not."""
+    operations = sensitive_operations(shop, make_user)
+    manager = stale_copy(shop.manager)
+    User.objects.filter(pk=manager.user_id).update(is_active=False)
+    with pytest.raises(NotPermittedError):
+        operations["revoke_workspace_device"](manager)
+    assert_nothing_happened(shop, "revoke_workspace_device")
 
 
 def test_authorize_actor_returns_the_fresh_row(shop):

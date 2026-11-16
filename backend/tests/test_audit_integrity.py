@@ -21,6 +21,7 @@ def settle_deferred_checks():
     pending, and PostgreSQL refuses TRUNCATE and ALTER TABLE behind them."""
     with connection.cursor() as cursor:
         cursor.execute("SET CONSTRAINTS ALL IMMEDIATE")
+        cursor.execute("SET CONSTRAINTS ALL DEFERRED")
 
 
 def refused(statement):
