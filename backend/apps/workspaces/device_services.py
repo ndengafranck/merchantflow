@@ -7,6 +7,7 @@ from apps.accounts.models import DeviceInstallation
 from apps.audit.services import record_event
 from apps.common.exceptions import NotFoundError, NotPermittedError
 
+from .locking import lock_memberships, locked_member
 from .models import (
     DeviceRevocationReason,
     MembershipStatus,
@@ -15,7 +16,6 @@ from .models import (
     WorkspaceMembership,
 )
 from .policies import Capability, has_capability, outranks
-from .services import authorize_actor
 
 
 def ensure_workspace_device(
@@ -66,23 +66,38 @@ def _authorize_on_first_entry(membership: WorkspaceMembership, lookup: dict) -> 
         return WorkspaceDevice.objects.get(**lookup)
 
 
-def _lock_device_and_holder(actor: WorkspaceMembership, device_id):
-    """Lock a device of the actor's workspace and find its holder's membership."""
-    device = (
+def _lock_device_and_holder(actor: WorkspaceMembership, capability: Capability, device_id):
+    """Lock in the order of ``locking.py``: workspace, then the actor and the
+    device holder's memberships together, then the device.
+
+    The holder is looked up first without a lock (a device's installation, and
+    so its holder, never changes); the rank decision is then taken on the
+    holder's locked, current membership.
+    """
+    peek = (
         WorkspaceDevice.objects.for_workspace(actor.workspace)
-        .select_for_update(of=("self",))
         .select_related("installation")
         .filter(pk=device_id)
         .first()
     )
-    if device is None:
-        return None, None
-    holder = (
-        WorkspaceMembership.objects.for_workspace(actor.workspace)
-        .filter(user_id=device.installation.user_id)
-        .first()
+    holder_id = None
+    if peek is not None:
+        holder_id = (
+            WorkspaceMembership.objects.filter(
+                workspace_id=actor.workspace_id, user_id=peek.installation.user_id
+            )
+            .values_list("pk", flat=True)
+            .first()
+        )
+    actor, locked = lock_memberships(actor, capability, [holder_id] if holder_id else [])
+    if peek is None:
+        return actor, None, None
+    device = (
+        WorkspaceDevice.objects.select_for_update(of=("self",))
+        .select_related("installation")
+        .get(pk=peek.pk)
     )
-    return device, holder
+    return actor, device, locked_member(locked, holder_id)
 
 
 def _may_act_on(actor: WorkspaceMembership, device, holder) -> bool:
@@ -94,7 +109,7 @@ def _may_act_on(actor: WorkspaceMembership, device, holder) -> bool:
     return has_capability(actor, Capability.DEVICES_MANAGE) and outranks(actor, holder)
 
 
-def _revoke(device: WorkspaceDevice, *, by, reason: str, workspace) -> None:
+def _revoke(device: WorkspaceDevice, *, by, reason: str, workspace, holder_role: str) -> None:
     device.status = WorkspaceDeviceStatus.REVOKED
     device.revoked_at = timezone.now()
     device.revoked_by = by
@@ -107,7 +122,7 @@ def _revoke(device: WorkspaceDevice, *, by, reason: str, workspace) -> None:
         target=device,
         actor=by,
         workspace=workspace,
-        metadata={"reason": reason},
+        metadata={"reason": reason, "holder_role": holder_role},
     )
 
 
@@ -120,13 +135,16 @@ def revoke_workspace_device(*, actor: WorkspaceMembership, device_id) -> Workspa
     owner or another manager. A device the actor may not touch is reported as
     not found.
     """
-    actor = authorize_actor(actor, Capability.DEVICES_USE)
-    device, holder = _lock_device_and_holder(actor, device_id)
+    actor, device, holder = _lock_device_and_holder(actor, Capability.DEVICES_USE, device_id)
     if not _may_act_on(actor, device, holder):
         raise NotFoundError("Device not found in this workspace.")
     if device.status == WorkspaceDeviceStatus.ACTIVE:
         _revoke(
-            device, by=actor.user, reason=DeviceRevocationReason.MANUAL, workspace=actor.workspace
+            device,
+            by=actor.user,
+            reason=DeviceRevocationReason.MANUAL,
+            workspace=actor.workspace,
+            holder_role=holder.role,
         )
     return device
 
@@ -140,8 +158,7 @@ def reauthorize_workspace_device(*, actor: WorkspaceMembership, device_id) -> Wo
     rank than the device's holder; the owner may also re-authorise their own.
     The holder must be an active member and the installation still active.
     """
-    actor = authorize_actor(actor, Capability.DEVICES_MANAGE)
-    device, holder = _lock_device_and_holder(actor, device_id)
+    actor, device, holder = _lock_device_and_holder(actor, Capability.DEVICES_MANAGE, device_id)
     own_as_owner = holder is not None and holder.pk == actor.pk and actor.is_owner
     if device is None or not (own_as_owner or (holder is not None and outranks(actor, holder))):
         raise NotFoundError("Device not found in this workspace.")
@@ -177,11 +194,12 @@ def reauthorize_workspace_device(*, actor: WorkspaceMembership, device_id) -> Wo
 
 def revoke_devices_of_removed_member(*, membership: WorkspaceMembership, by) -> int:
     """Revoke every active device of a member being removed. Call inside the
-    removal transaction, with the membership row already locked."""
+    removal transaction, after ``locking.py`` steps 1-2 (step 3 happens here)."""
     devices = (
         WorkspaceDevice.objects.for_workspace(membership.workspace)
-        .select_for_update()
+        .select_for_update(of=("self",))
         .filter(installation__user_id=membership.user_id, status=WorkspaceDeviceStatus.ACTIVE)
+        .order_by("pk")
     )
     count = 0
     for device in devices:
@@ -190,6 +208,7 @@ def revoke_devices_of_removed_member(*, membership: WorkspaceMembership, by) -> 
             by=by,
             reason=DeviceRevocationReason.MEMBERSHIP_REMOVED,
             workspace=membership.workspace,
+            holder_role=membership.role,
         )
         count += 1
     return count

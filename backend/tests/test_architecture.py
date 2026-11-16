@@ -219,6 +219,8 @@ DOMAIN_MODULES = [
     "apps/workspaces/selectors.py",
     "apps/workspaces/services.py",
     "apps/workspaces/device_services.py",
+    "apps/workspaces/locking.py",
+    "apps/workspaces/ownership_checks.py",
     "apps/workspaces/context.py",
 ]
 HTTP_PACKAGES = ("rest_framework", "django.http", "drf_spectacular")

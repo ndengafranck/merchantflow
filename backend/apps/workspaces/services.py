@@ -15,14 +15,14 @@ from apps.accounts.models import User
 from apps.audit.services import record_event
 from apps.common.exceptions import ConflictError, DomainError, NotPermittedError
 
+from .locking import lock_memberships, locked_member
 from .models import (
     MembershipRole,
     MembershipStatus,
     Workspace,
     WorkspaceMembership,
-    WorkspaceStatus,
 )
-from .policies import Capability, require_capability
+from .policies import Capability
 
 
 def _unique_slug(name: str) -> str:
@@ -48,41 +48,24 @@ def create_workspace(*, name: str, owner: User) -> Workspace:
 
 
 def authorize_actor(actor: WorkspaceMembership, capability: Capability) -> WorkspaceMembership:
-    """Re-read and lock the acting membership, then check it may do this.
+    """Lock the workspace and the acting membership (``locking.py`` steps 1-2),
+    then check, on the fresh row, that the actor may do this.
 
-    Must be called inside a transaction. The lock is held until commit, so the
-    actor cannot be demoted, suspended or removed while the operation runs.
+    Must be called inside a transaction. The locks are held until commit, so
+    the actor cannot be demoted, suspended or removed while the operation runs.
     Returns the fresh row; callers must use it instead of the one passed in.
     """
-    if not transaction.get_connection().in_atomic_block:
-        raise RuntimeError("authorize_actor must be called inside transaction.atomic().")
-    fresh = (
-        WorkspaceMembership.objects.select_for_update(of=("self",))
-        .select_related("workspace", "user")
-        .filter(pk=actor.pk)
-        .first()
-    )
-    if (
-        fresh is None
-        or fresh.status != MembershipStatus.ACTIVE
-        or fresh.workspace.status != WorkspaceStatus.ACTIVE
-        or not fresh.user.is_active
-    ):
-        raise NotPermittedError("You no longer have access to this workspace.")
-    require_capability(fresh, capability)
+    fresh, _ = lock_memberships(actor, capability)
     return fresh
 
 
-def _lock_target(actor: WorkspaceMembership, membership_id) -> WorkspaceMembership:
-    """Lock a membership for update, scoped to the (already authorised) actor's workspace."""
-    try:
-        return (
-            WorkspaceMembership.objects.for_workspace(actor.workspace)
-            .select_for_update(of=("self",))
-            .get(pk=membership_id)
-        )
-    except WorkspaceMembership.DoesNotExist as exc:
-        raise DomainError("Member not found in this workspace.", code="member_not_found") from exc
+def _lock_actor_and_target(actor, capability, membership_id):
+    """Steps 1-2 for an operation on another member of the actor's workspace."""
+    fresh, locked = lock_memberships(actor, capability, [membership_id])
+    target = locked_member(locked, membership_id)
+    if target is None:
+        raise DomainError("Member not found in this workspace.", code="member_not_found")
+    return fresh, target
 
 
 @transaction.atomic
@@ -113,8 +96,7 @@ def add_member(*, actor: WorkspaceMembership, user: User, role: str) -> Workspac
 def change_member_role(
     *, actor: WorkspaceMembership, membership_id, role: str
 ) -> WorkspaceMembership:
-    actor = authorize_actor(actor, Capability.MEMBERS_MANAGE)
-    membership = _lock_target(actor, membership_id)
+    actor, membership = _lock_actor_and_target(actor, Capability.MEMBERS_MANAGE, membership_id)
     if role not in MembershipRole.values:
         raise DomainError("Unknown role.", code="invalid_role")
     if membership.is_owner or role == MembershipRole.OWNER:
@@ -140,8 +122,7 @@ def change_member_role(
 def set_member_status(
     *, actor: WorkspaceMembership, membership_id, status: str
 ) -> WorkspaceMembership:
-    actor = authorize_actor(actor, Capability.MEMBERS_MANAGE)
-    membership = _lock_target(actor, membership_id)
+    actor, membership = _lock_actor_and_target(actor, Capability.MEMBERS_MANAGE, membership_id)
     if status not in MembershipStatus.values:
         raise DomainError("Unknown status.", code="invalid_status")
     if membership.is_owner:
@@ -172,18 +153,11 @@ def set_member_status(
 @transaction.atomic
 def transfer_ownership(*, actor: WorkspaceMembership, new_owner_id) -> WorkspaceMembership:
     """Make another active member the owner; the previous owner becomes a manager."""
-    # Lock the workspace row first so concurrent transfers serialise.
-    Workspace.objects.select_for_update().get(pk=actor.workspace_id)
-    current = authorize_actor(actor, Capability.MEMBERS_MANAGE)
+    # locking.py steps 1-2: workspace, then current owner and successor together.
+    current, locked = lock_memberships(actor, Capability.MEMBERS_MANAGE, [new_owner_id])
     if not current.is_owner:
         raise NotPermittedError("Only the owner can transfer ownership.", code="not_owner")
-    successor = (
-        WorkspaceMembership.objects.for_workspace(current.workspace)
-        .select_for_update(of=("self",))
-        .select_related("user")
-        .filter(pk=new_owner_id)
-        .first()
-    )
+    successor = locked_member(locked, new_owner_id)
     if successor is None:
         raise DomainError("Member not found in this workspace.", code="member_not_found")
     # Lock the successor's account too, so a concurrent deactivation of that
