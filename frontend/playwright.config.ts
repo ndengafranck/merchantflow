@@ -36,6 +36,7 @@ export default defineConfig({
       timeout: 120_000,
       env: {
         DATABASE_URL,
+        DJANGO_ENVIRONMENT: "test",
         DJANGO_SECRET_KEY: "insecure-e2e-only",
         DJANGO_DEBUG: "true",
         DJANGO_ALLOWED_HOSTS: "localhost,127.0.0.1",

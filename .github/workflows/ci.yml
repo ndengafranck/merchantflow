@@ -23,6 +23,7 @@ jobs:
           --health-cmd "pg_isready -U merchantflow"
           --health-interval 5s --health-timeout 3s --health-retries 10
     env:
+      DJANGO_ENVIRONMENT: test
       DJANGO_SECRET_KEY: insecure-ci-only
       DJANGO_DEBUG: "true"
       DATABASE_URL: postgres://merchantflow:ci_only_password@127.0.0.1:5432/merchantflow

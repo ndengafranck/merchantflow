@@ -16,8 +16,23 @@ env = environ.Env()
 # A local .env file is a development convenience; real environment variables
 # win. Deployments (and tests of production settings) set
 # DJANGO_READ_DOT_ENV=false so a stray file cannot fill in missing values.
-if env.bool("DJANGO_READ_DOT_ENV", default=True):
+READ_DOT_ENV = env.bool("DJANGO_READ_DOT_ENV", default=True)
+if READ_DOT_ENV:
     environ.Env.read_env(BASE_DIR / ".env")
+
+# Which kind of deployment this is. Required, with no default, so a server can
+# never fall into a lax mode by omission. Security behaviour follows this, not
+# DEBUG: production rules apply whenever it is "production", even if someone
+# turns DEBUG on (which production then refuses).
+ENVIRONMENTS = ("development", "test", "production")
+ENVIRONMENT = env.str("DJANGO_ENVIRONMENT", default="")
+if ENVIRONMENT not in ENVIRONMENTS:
+    raise ImproperlyConfigured(
+        "Set DJANGO_ENVIRONMENT to one of: " + ", ".join(ENVIRONMENTS) + ". "
+        "For local work add DJANGO_ENVIRONMENT=development to backend/.env "
+        f"(got {ENVIRONMENT!r})."
+    )
+IS_PRODUCTION = ENVIRONMENT == "production"
 
 DEBUG = env.bool("DJANGO_DEBUG", default=False)
 SECRET_KEY = env.str("DJANGO_SECRET_KEY")
@@ -95,7 +110,7 @@ AUTH_PASSWORD_VALIDATORS = [
 # The browser authenticates with a server-side session referenced by an
 # HttpOnly cookie. JavaScript can never read the session identifier; it only
 # reads the CSRF token, which is useless without the session cookie.
-SECURE_COOKIES = env.bool("DJANGO_SECURE_COOKIES", default=not DEBUG)
+SECURE_COOKIES = env.bool("DJANGO_SECURE_COOKIES", default=IS_PRODUCTION)
 SESSION_ENGINE = "apps.accounts.session_store"  # sessions know their user and device
 SESSION_COOKIE_NAME = "mf_session"
 SESSION_COOKIE_HTTPONLY = True
@@ -114,9 +129,11 @@ CSRF_TRUSTED_ORIGINS = env.list("DJANGO_CSRF_TRUSTED_ORIGINS", default=[])
 CSRF_FAILURE_VIEW = "apps.common.views.csrf_failure"
 
 # --- Transport security --------------------------------------------------
-# On by default whenever DEBUG is off; production_checks refuses to turn them off.
-SECURE_SSL_REDIRECT = env.bool("DJANGO_SECURE_SSL_REDIRECT", default=not DEBUG)
-SECURE_HSTS_SECONDS = env.int("DJANGO_HSTS_SECONDS", default=0 if DEBUG else 60 * 60 * 24 * 365)
+# On by default in production; production_checks refuses to turn them off.
+SECURE_SSL_REDIRECT = env.bool("DJANGO_SECURE_SSL_REDIRECT", default=IS_PRODUCTION)
+SECURE_HSTS_SECONDS = env.int(
+    "DJANGO_HSTS_SECONDS", default=60 * 60 * 24 * 365 if IS_PRODUCTION else 0
+)
 SECURE_HSTS_INCLUDE_SUBDOMAINS = env.bool("DJANGO_HSTS_INCLUDE_SUBDOMAINS", default=False)
 SECURE_HSTS_PRELOAD = env.bool("DJANGO_HSTS_PRELOAD", default=False)
 # Health checks come from the load balancer over plain HTTP inside the network.
@@ -144,11 +161,11 @@ LOGIN_PROTECTION = {
 }
 
 # --- Django admin ------------------------------------------------------------
-ADMIN_ENABLED = env.bool("DJANGO_ADMIN_ENABLED", default=DEBUG)
+ADMIN_ENABLED = env.bool("DJANGO_ADMIN_ENABLED", default=DEBUG and not IS_PRODUCTION)
 ADMIN_PATH = env.str("DJANGO_ADMIN_PATH", default="admin/")
 
 # --- API ------------------------------------------------------------------
-API_DOCS_ENABLED = env.bool("API_DOCS_ENABLED", default=DEBUG)
+API_DOCS_ENABLED = env.bool("API_DOCS_ENABLED", default=DEBUG and not IS_PRODUCTION)
 
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": ["apps.accounts.authentication.SessionAuthentication"],
@@ -183,11 +200,17 @@ SPECTACULAR_SETTINGS = {
 # a deploy-check failure.
 SILENCED_SYSTEM_CHECKS = ["security.W021"]
 
-if not DEBUG:
-    from config.production_checks import SecuritySettings, production_problems
+from config.production_checks import (  # noqa: E402
+    SecuritySettings,
+    non_production_problems,
+    production_problems,
+)
 
+if IS_PRODUCTION:
     _problems = production_problems(
         SecuritySettings(
+            debug=DEBUG,
+            reads_dot_env=READ_DOT_ENV,
             secret_key=SECRET_KEY,
             secure_cookies=SECURE_COOKIES,
             allowed_hosts=ALLOWED_HOSTS,
@@ -200,10 +223,16 @@ if not DEBUG:
             admin_path=ADMIN_PATH,
         )
     )
-    if _problems:
-        raise ImproperlyConfigured(
-            "Unsafe production settings (DJANGO_DEBUG is false):\n- " + "\n- ".join(_problems)
-        )
+else:
+    _problems = non_production_problems(
+        environment=ENVIRONMENT,
+        allowed_hosts=ALLOWED_HOSTS,
+        allow_non_local_hosts=env.bool("DJANGO_ALLOW_NON_LOCAL_HOSTS", default=False),
+    )
+if _problems:
+    raise ImproperlyConfigured(
+        f"Unsafe settings for DJANGO_ENVIRONMENT={ENVIRONMENT}:\n- " + "\n- ".join(_problems)
+    )
 
 # --- Internationalisation ---------------------------------------------------
 LANGUAGE_CODE = "en"

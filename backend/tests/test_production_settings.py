@@ -10,11 +10,18 @@ from pathlib import Path
 import pytest
 from django.test import Client, override_settings
 
-from config.production_checks import SecuritySettings, production_problems
+from config.production_checks import (
+    SecuritySettings,
+    is_local_host,
+    non_production_problems,
+    production_problems,
+)
 
 BACKEND = Path(__file__).resolve().parent.parent
 
 SAFE = SecuritySettings(
+    debug=False,
+    reads_dot_env=False,
     secret_key=secrets.token_urlsafe(64),
     secure_cookies=True,
     allowed_hosts=["app.merchantflow.example"],
@@ -35,6 +42,8 @@ def test_a_safe_configuration_has_no_problems():
 @pytest.mark.parametrize(
     ("change", "mentions"),
     [
+        ({"debug": True}, "DJANGO_DEBUG"),
+        ({"reads_dot_env": True}, "DJANGO_READ_DOT_ENV"),
         ({"secret_key": "insecure-dev-only-change-me"}, "DJANGO_SECRET_KEY"),
         ({"secret_key": "short"}, "DJANGO_SECRET_KEY"),
         ({"secret_key": "s" * 64}, "DJANGO_SECRET_KEY"),
@@ -105,13 +114,99 @@ def test_the_documented_production_settings_pass_the_deploy_check():
 def test_unsafe_production_settings_stop_the_application_starting(overrides, mentions):
     result = manage("check", **overrides)
     assert result.returncode != 0
-    assert "Unsafe production settings" in result.stderr
+    assert "Unsafe settings for DJANGO_ENVIRONMENT=production" in result.stderr
     assert mentions in result.stderr
 
 
-def test_debug_mode_is_not_subject_to_the_production_rules():
+def test_production_with_debug_on_is_refused():
+    """C2: DEBUG=true must not switch the production rules off."""
+    result = manage("check", DJANGO_DEBUG="true")
+    assert result.returncode != 0
+    assert "DJANGO_ENVIRONMENT=production" in result.stderr
+    assert "DJANGO_DEBUG must be false" in result.stderr
+
+
+def test_production_with_debug_on_still_applies_every_other_rule():
     result = manage("check", DJANGO_DEBUG="true", DJANGO_SECURE_COOKIES="false")
+    assert result.returncode != 0
+    assert "DJANGO_DEBUG must be false" in result.stderr
+    assert "DJANGO_SECURE_COOKIES" in result.stderr
+
+
+def test_production_refuses_to_read_a_dot_env_file():
+    result = manage("check", DJANGO_READ_DOT_ENV="true")
+    assert result.returncode != 0
+    assert "DJANGO_READ_DOT_ENV" in result.stderr
+
+
+@pytest.mark.parametrize("value", [None, "", "prod", "staging"])
+def test_the_environment_must_be_declared(value):
+    result = manage("check", DJANGO_ENVIRONMENT=value)
+    assert result.returncode != 0
+    assert "Set DJANGO_ENVIRONMENT to one of: development, test, production" in result.stderr
+
+
+@pytest.mark.parametrize("environment", ["development", "test"])
+def test_development_and_test_run_with_local_settings(environment):
+    result = manage(
+        "check",
+        DJANGO_ENVIRONMENT=environment,
+        DJANGO_DEBUG="true",
+        DJANGO_SECURE_COOKIES="false",
+        DJANGO_SECURE_SSL_REDIRECT="false",
+        DJANGO_HSTS_SECONDS="0",
+        DJANGO_ALLOWED_HOSTS="localhost,127.0.0.1",
+        DJANGO_TRUSTED_PROXY_COUNT="0",
+    )
     assert result.returncode == 0, result.stderr
+
+
+def test_a_public_site_labelled_development_is_refused():
+    """A production deployment that forgot DJANGO_ENVIRONMENT=production fails."""
+    result = manage(
+        "check",
+        DJANGO_ENVIRONMENT="development",
+        DJANGO_DEBUG="true",
+        DJANGO_ALLOWED_HOSTS="app.merchantflow.cm",
+    )
+    assert result.returncode != 0
+    assert "app.merchantflow.cm, which is not a local name" in result.stderr
+    assert "DJANGO_ENVIRONMENT=production" in result.stderr
+
+
+def test_a_public_host_in_development_needs_an_explicit_opt_in():
+    public = {"DJANGO_ENVIRONMENT": "development", "DJANGO_ALLOWED_HOSTS": "shop.example.com"}
+    refused = manage("check", **public)
+    assert refused.returncode != 0 and "DJANGO_ALLOW_NON_LOCAL_HOSTS" in refused.stderr
+    allowed = manage("check", DJANGO_ALLOW_NON_LOCAL_HOSTS="true", **public)
+    assert allowed.returncode == 0, allowed.stderr
+
+
+@pytest.mark.parametrize(
+    ("host", "local"),
+    [
+        ("localhost", True),
+        ("127.0.0.1", True),
+        ("[::1]", True),
+        ("192.168.1.20", True),
+        ("10.0.0.5", True),
+        ("testserver", True),
+        ("backend", True),
+        ("api.localhost", True),
+        (".localhost", True),
+        ("app.merchantflow.example", True),
+        ("shop.example.com", False),
+        ("merchantflow.cm", False),
+        ("41.202.207.10", False),
+        ("*", False),
+    ],
+)
+def test_local_host_detection(host, local):
+    assert is_local_host(host) is local
+    problems = non_production_problems(
+        environment="development", allowed_hosts=[host], allow_non_local_hosts=False
+    )
+    assert (problems == []) is local
 
 
 # --- Response headers ----------------------------------------------------------------

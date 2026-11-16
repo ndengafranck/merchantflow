@@ -43,7 +43,14 @@ cp backend/.env.example backend/.env
 ```
 
 `backend/.env` is ignored by Git. The example values work for local
-development as they are. Every variable is described in
+development as they are.
+
+`DJANGO_ENVIRONMENT` is required: `development` locally, `test` in CI and
+browser tests, `production` on servers. **Upgrading an existing checkout:** add
+`DJANGO_ENVIRONMENT=development` to your `backend/.env`, or the backend will
+refuse to start and say so. Development and test only answer to local host
+names; production rules apply whenever the environment is `production`, even
+with `DJANGO_DEBUG=true` (which production refuses). Every variable is described in
 [backend/.env.example](backend/.env.example); for anything other than local
 development you must set a real `DJANGO_SECRET_KEY` (the application refuses
 to start with the placeholder when `DJANGO_DEBUG=false`), `DJANGO_ALLOWED_HOSTS`,
