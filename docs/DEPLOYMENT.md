@@ -68,3 +68,35 @@ operations, raw SQL, `TRUNCATE`), but not someone running SQL as the owner.
 `GET /api/health/` is exempt from the HTTPS redirect so a load balancer can
 probe it over the internal network. It reveals only whether the database is
 reachable.
+
+## Repairing workspace ownership
+
+The database requires every workspace to have exactly one active owner
+membership and, unless the workspace is archived, that owner's account to be
+active. Migration `workspaces.0005` checks existing data before installing
+that rule and **refuses to run** (changing nothing) if any workspace breaks it.
+It lists each offending workspace by id, name and status, with the owner
+membership ids it found.
+
+1. List the problems at any time, read-only:
+
+   ```bash
+   python manage.py check_workspace_owners
+   ```
+
+2. Repair each workspace by deciding who should own it. Nothing is repaired
+   automatically, because choosing an owner is a business decision. Before
+   `workspaces.0005` is applied the ownership triggers do not exist yet, so
+   the repair is plain SQL by the database owner, in one transaction:
+
+   | Problem | Repair |
+   |---|---|
+   | No active owner membership | Set exactly one chosen, active member to `role = 'owner'` |
+   | More than one owner | Keep the rightful owner; set the others to `role = 'manager'` |
+   | Owner account inactive (workspace not archived) | Reactivate the account, or make another active member the owner and the old owner a manager, or set the workspace `status = 'archived'` |
+
+3. Run `check_workspace_owners` again until it reports no problems, then
+   `python manage.py migrate`.
+
+After `workspaces.0005` is applied, ownership changes go through
+`transfer_ownership` and `deactivate_user`; the triggers refuse anything else.

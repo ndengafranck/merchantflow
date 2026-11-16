@@ -6,9 +6,77 @@
    then promote, in one transaction) passes while any committed state without
    an owner is refused, whichever code path produced it.
 2. An account that owns a non-archived workspace cannot be deactivated.
+
+Constraint triggers are not evaluated against rows that already exist, so the
+migration first locks the tables against writes and refuses to continue if any
+existing workspace already breaks rule 1 (``preflight``). It never repairs data.
+The whole migration is one transaction: a refusal leaves nothing installed.
 """
 
 from django.db import migrations
+
+# Frozen copy of apps.workspaces.ownership_checks.OWNER_VIOLATIONS_SQL at the
+# time of this migration (tests/test_owner_migration.py checks they match).
+PREFLIGHT_SQL = """
+SELECT w.id,
+       w.name,
+       w.status,
+       count(m.id) AS active_owner_memberships,
+       count(m.id) FILTER (WHERE NOT u.is_active) AS inactive_owner_accounts,
+       coalesce(array_agg(m.id::text ORDER BY m.id) FILTER (WHERE m.id IS NOT NULL), '{}')
+           AS owner_membership_ids
+  FROM workspaces_workspace w
+  LEFT JOIN workspaces_workspacemembership m
+         ON m.workspace_id = w.id AND m.role = 'owner' AND m.status = 'active'
+  LEFT JOIN accounts_user u ON u.id = m.user_id
+ GROUP BY w.id, w.name, w.status
+HAVING count(m.id) <> 1
+    OR (w.status <> 'archived' AND count(m.id) FILTER (WHERE NOT u.is_active) > 0)
+ ORDER BY w.name, w.id
+"""
+
+
+class OwnershipPreflightError(RuntimeError):
+    """Existing data breaks the rule this migration is about to enforce."""
+
+
+def preflight(apps, schema_editor):
+    with schema_editor.connection.cursor() as cursor:
+        # Block writes (reads continue) until this migration commits, so no
+        # invalid row can appear between the check and the trigger creation.
+        cursor.execute(
+            "LOCK TABLE workspaces_workspace, workspaces_workspacemembership, accounts_user "
+            "IN SHARE ROW EXCLUSIVE MODE"
+        )
+        cursor.execute(PREFLIGHT_SQL)
+        columns = [c.name for c in cursor.description]
+        violations = [dict(zip(columns, row, strict=True)) for row in cursor.fetchall()]
+    if not violations:
+        return
+    lines = []
+    for v in violations[:50]:
+        problems = []
+        if v["active_owner_memberships"] == 0:
+            problems.append("no active owner membership")
+        elif v["active_owner_memberships"] > 1:
+            problems.append(f"{v['active_owner_memberships']} active owner memberships")
+        if v["status"] != "archived" and v["inactive_owner_accounts"]:
+            problems.append("owner account is inactive")
+        owners = ", ".join(v["owner_membership_ids"]) or "none"
+        lines.append(
+            f"  - workspace {v['id']} \"{v['name']}\" (status {v['status']}): "
+            f"{'; '.join(problems)}; owner membership ids: {owners}"
+        )
+    if len(violations) > 50:
+        lines.append(f"  ... and {len(violations) - 50} more")
+    raise OwnershipPreflightError(
+        f"workspaces.0005 refused: {len(violations)} existing workspace(s) break the "
+        "ownership rule it enforces. Nothing was changed.\n"
+        + "\n".join(lines)
+        + "\nRepair them as described in docs/DEPLOYMENT.md (\"Repairing workspace "
+        "ownership\"), confirm with `manage.py check_workspace_owners`, then migrate again. "
+        "No data is repaired automatically."
+    )
 
 FORWARD = """
 CREATE FUNCTION workspaces_assert_single_active_owner(ws uuid) RETURNS void
@@ -109,4 +177,7 @@ class Migration(migrations.Migration):
         ("accounts", "0003_login_attempt_buckets"),
     ]
 
-    operations = [migrations.RunSQL(FORWARD, REVERSE)]
+    operations = [
+        migrations.RunPython(preflight, migrations.RunPython.noop),
+        migrations.RunSQL(FORWARD, REVERSE),
+    ]
