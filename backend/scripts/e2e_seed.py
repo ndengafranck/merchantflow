@@ -74,6 +74,9 @@ def seed() -> None:
 if __name__ == "__main__":
     ensure_database(settings.DATABASES["default"])
     call_command("migrate", interactive=False, verbosity=0)
-    call_command("flush", interactive=False, verbosity=0)
+    from apps.audit.maintenance import audit_protection_suspended
+
+    with audit_protection_suspended():  # throwaway database: audit rows may go
+        call_command("flush", interactive=False, verbosity=0)
     seed()
     print(f"Seeded {settings.DATABASES['default']['NAME']}")  # noqa: T201

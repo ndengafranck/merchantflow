@@ -10,6 +10,30 @@ from apps.workspaces.models import MembershipRole, WorkspaceMembership
 from apps.workspaces.services import create_workspace
 
 PASSWORD = "correct-horse-battery"
+
+
+def _flush_with_audit_protection_suspended():
+    """Transactional tests end with ``flush`` (TRUNCATE of every table), which
+    the audit table's append-only triggers refuse. The test database role owns
+    the tables, so it may suspend them for that one statement, exactly like
+    ``scripts/e2e_seed.py`` does."""
+    from django.core.management.commands import flush
+
+    from apps.audit.maintenance import audit_protection_suspended
+
+    original = flush.Command.handle
+    if getattr(original, "_suspends_audit", False):
+        return
+
+    def handle(self, **options):
+        with audit_protection_suspended(options.get("database", "default")):
+            return original(self, **options)
+
+    handle._suspends_audit = True
+    flush.Command.handle = handle
+
+
+_flush_with_audit_protection_suspended()
 _sequence = itertools.count(1)
 
 
