@@ -30,6 +30,21 @@ ROLE_CAPABILITIES: dict[str, frozenset[Capability]] = {
 }
 
 
+# Who may act on whose devices (and, from Milestone 2.4, memberships). An
+# actor may act on members of strictly lower rank, never on equals or above,
+# so a manager cannot lock out the owner or another manager.
+ROLE_RANK: dict[str, int] = {
+    MembershipRole.OWNER: 3,
+    MembershipRole.MANAGER: 2,
+    MembershipRole.ATTENDANT: 1,
+    MembershipRole.AFFILIATE: 1,
+}
+
+
+def outranks(actor: WorkspaceMembership, target: WorkspaceMembership) -> bool:
+    return ROLE_RANK.get(actor.role, 0) > ROLE_RANK.get(target.role, 0)
+
+
 def capabilities_for(membership: WorkspaceMembership) -> frozenset[Capability]:
     return ROLE_CAPABILITIES.get(membership.role, frozenset())
 

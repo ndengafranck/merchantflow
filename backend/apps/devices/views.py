@@ -38,6 +38,19 @@ class DeviceRevokeView(WorkspaceAPIView):
         return Response(WorkspaceDeviceSerializer(device, context={"request": request}).data)
 
 
+class DeviceReauthorizeView(WorkspaceAPIView):
+    """Lift a revocation. Rank rules are enforced by the service."""
+
+    required_capability = Capability.DEVICES_MANAGE
+
+    @extend_schema(request=None, responses=WorkspaceDeviceSerializer)
+    def post(self, request: Request, workspace_id, device_id) -> Response:
+        device = device_services.reauthorize_workspace_device(
+            actor=request.membership, device_id=device_id
+        )
+        return Response(WorkspaceDeviceSerializer(device, context={"request": request}).data)
+
+
 class SyncHandshakeView(WorkspaceAPIView):
     """Confirms that this browser may synchronise with this workspace.
 

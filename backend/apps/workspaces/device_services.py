@@ -7,8 +7,14 @@ from apps.accounts.models import DeviceInstallation
 from apps.audit.services import record_event
 from apps.common.exceptions import NotFoundError, NotPermittedError
 
-from .models import WorkspaceDevice, WorkspaceDeviceStatus, WorkspaceMembership
-from .policies import Capability, has_capability
+from .models import (
+    DeviceRevocationReason,
+    MembershipStatus,
+    WorkspaceDevice,
+    WorkspaceDeviceStatus,
+    WorkspaceMembership,
+)
+from .policies import Capability, has_capability, outranks
 from .services import authorize_actor
 
 
@@ -19,25 +25,14 @@ def ensure_workspace_device(
 
     The first entry by an active member creates it (no owner approval is
     required at present, see OPEN_DECISIONS O-020). A revoked authorisation is
-    final for that installation: it is never recreated here.
+    never recreated here; only ``reauthorize_workspace_device`` lifts it.
     """
     if installation.user_id != membership.user_id or not installation.is_active:
         raise NotPermittedError("This device cannot be used here.", code="device_not_authorized")
     lookup = {"workspace_id": membership.workspace_id, "installation": installation}
     device = WorkspaceDevice.objects.filter(**lookup).first()
     if device is None:
-        try:
-            with transaction.atomic():
-                device = WorkspaceDevice.objects.create(**lookup)
-                record_event(
-                    action="device.authorized",
-                    target=device,
-                    actor=membership.user,
-                    workspace=membership.workspace,
-                )
-        except IntegrityError:
-            # Another request from the same browser created it first.
-            device = WorkspaceDevice.objects.get(**lookup)
+        device = _authorize_on_first_entry(membership, lookup)
     if device.status != WorkspaceDeviceStatus.ACTIVE:
         raise NotPermittedError(
             "This device is no longer authorised for this workspace.",
@@ -46,14 +41,33 @@ def ensure_workspace_device(
     return device
 
 
-@transaction.atomic
-def revoke_workspace_device(*, actor: WorkspaceMembership, device_id) -> WorkspaceDevice:
-    """Close the workspace to one installation. Idempotent.
+def _authorize_on_first_entry(membership: WorkspaceMembership, lookup: dict) -> WorkspaceDevice:
+    try:
+        with transaction.atomic():
+            # Lock the membership so this cannot interleave with its removal:
+            # removal holds the row FOR UPDATE until it has revoked every device.
+            still_active = (
+                WorkspaceMembership.objects.select_for_update(no_key=True)
+                .filter(pk=membership.pk, status=MembershipStatus.ACTIVE)
+                .exists()
+            )
+            if not still_active:
+                raise NotFoundError("Workspace not found.")
+            device = WorkspaceDevice.objects.create(**lookup)
+            record_event(
+                action="device.authorized",
+                target=device,
+                actor=membership.user,
+                workspace=membership.workspace,
+            )
+            return device
+    except IntegrityError:
+        # Another request from the same browser created it first.
+        return WorkspaceDevice.objects.get(**lookup)
 
-    Members revoke their own; holders of ``devices.manage`` revoke any. A
-    device the actor may not touch is reported as not found.
-    """
-    actor = authorize_actor(actor, Capability.DEVICES_USE)
+
+def _lock_device_and_holder(actor: WorkspaceMembership, device_id):
+    """Lock a device of the actor's workspace and find its holder's membership."""
     device = (
         WorkspaceDevice.objects.for_workspace(actor.workspace)
         .select_for_update(of=("self",))
@@ -61,19 +75,124 @@ def revoke_workspace_device(*, actor: WorkspaceMembership, device_id) -> Workspa
         .filter(pk=device_id)
         .first()
     )
-    is_own = device is not None and device.installation.user_id == actor.user_id
-    if device is None or not (is_own or has_capability(actor, Capability.DEVICES_MANAGE)):
-        raise NotFoundError("Device not found in this workspace.")
-    if device.status == WorkspaceDeviceStatus.REVOKED:
-        return device
+    if device is None:
+        return None, None
+    holder = (
+        WorkspaceMembership.objects.for_workspace(actor.workspace)
+        .filter(user_id=device.installation.user_id)
+        .first()
+    )
+    return device, holder
+
+
+def _may_act_on(actor: WorkspaceMembership, device, holder) -> bool:
+    """Own devices always; others only with devices.manage and a higher rank."""
+    if device is None or holder is None:
+        return False
+    if holder.pk == actor.pk:
+        return True
+    return has_capability(actor, Capability.DEVICES_MANAGE) and outranks(actor, holder)
+
+
+def _revoke(device: WorkspaceDevice, *, by, reason: str, workspace) -> None:
     device.status = WorkspaceDeviceStatus.REVOKED
     device.revoked_at = timezone.now()
-    device.revoked_by = actor.user
-    device.save(update_fields=["status", "revoked_at", "revoked_by", "updated_at"])
+    device.revoked_by = by
+    device.revocation_reason = reason
+    device.save(
+        update_fields=["status", "revoked_at", "revoked_by", "revocation_reason", "updated_at"]
+    )
     record_event(
-        action="device.revoked", target=device, actor=actor.user, workspace=actor.workspace
+        action="device.revoked",
+        target=device,
+        actor=by,
+        workspace=workspace,
+        metadata={"reason": reason},
+    )
+
+
+@transaction.atomic
+def revoke_workspace_device(*, actor: WorkspaceMembership, device_id) -> WorkspaceDevice:
+    """Close the workspace to one installation. Idempotent.
+
+    Members revoke their own devices. Holders of ``devices.manage`` revoke
+    devices of members ranked below them, so a manager cannot lock out the
+    owner or another manager. A device the actor may not touch is reported as
+    not found.
+    """
+    actor = authorize_actor(actor, Capability.DEVICES_USE)
+    device, holder = _lock_device_and_holder(actor, device_id)
+    if not _may_act_on(actor, device, holder):
+        raise NotFoundError("Device not found in this workspace.")
+    if device.status == WorkspaceDeviceStatus.ACTIVE:
+        _revoke(
+            device, by=actor.user, reason=DeviceRevocationReason.MANUAL, workspace=actor.workspace
+        )
+    return device
+
+
+@transaction.atomic
+def reauthorize_workspace_device(*, actor: WorkspaceMembership, device_id) -> WorkspaceDevice:
+    """Lift a revocation, explicitly. Idempotent for an active device.
+
+    The only way a revoked browser regains access to a workspace, including
+    after the member was reinstated. Requires ``devices.manage`` and a higher
+    rank than the device's holder; the owner may also re-authorise their own.
+    The holder must be an active member and the installation still active.
+    """
+    actor = authorize_actor(actor, Capability.DEVICES_MANAGE)
+    device, holder = _lock_device_and_holder(actor, device_id)
+    own_as_owner = holder is not None and holder.pk == actor.pk and actor.is_owner
+    if device is None or not (own_as_owner or (holder is not None and outranks(actor, holder))):
+        raise NotFoundError("Device not found in this workspace.")
+    if device.status == WorkspaceDeviceStatus.ACTIVE:
+        return device
+    if holder.status != MembershipStatus.ACTIVE:
+        raise NotPermittedError(
+            "Reinstate the member before re-authorising their device.",
+            code="member_not_active",
+        )
+    if not device.installation.is_active:
+        raise NotPermittedError(
+            "This browser was signed out everywhere by its owner and cannot be re-authorised.",
+            code="installation_revoked",
+        )
+    previous_reason = device.revocation_reason
+    device.status = WorkspaceDeviceStatus.ACTIVE
+    device.revoked_at = None
+    device.revoked_by = None
+    device.revocation_reason = None
+    device.save(
+        update_fields=["status", "revoked_at", "revoked_by", "revocation_reason", "updated_at"]
+    )
+    record_event(
+        action="device.reauthorized",
+        target=device,
+        actor=actor.user,
+        workspace=actor.workspace,
+        metadata={"previous_reason": previous_reason},
     )
     return device
+
+
+def revoke_devices_of_removed_member(*, membership: WorkspaceMembership, by) -> int:
+    """Revoke every active device of a member being removed. Call inside the
+    removal transaction, with the membership row already locked."""
+    devices = (
+        WorkspaceDevice.objects.for_workspace(membership.workspace)
+        .select_for_update()
+        .filter(installation__user_id=membership.user_id, status=WorkspaceDeviceStatus.ACTIVE)
+    )
+    count = 0
+    for device in devices:
+        _revoke(
+            device,
+            by=by,
+            reason=DeviceRevocationReason.MEMBERSHIP_REMOVED,
+            workspace=membership.workspace,
+        )
+        count += 1
+    return count
 
 
 def touch_workspace_device(device: WorkspaceDevice) -> None:

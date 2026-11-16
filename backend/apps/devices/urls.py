@@ -8,5 +8,10 @@ urlpatterns = [
     path(
         "devices/<uuid:device_id>/revoke/", views.DeviceRevokeView.as_view(), name="device-revoke"
     ),
+    path(
+        "devices/<uuid:device_id>/reauthorize/",
+        views.DeviceReauthorizeView.as_view(),
+        name="device-reauthorize",
+    ),
     path("sync/handshake/", views.SyncHandshakeView.as_view(), name="sync-handshake"),
 ]

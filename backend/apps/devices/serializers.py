@@ -15,6 +15,7 @@ class WorkspaceDeviceSerializer(serializers.ModelSerializer):
             "user_id",
             "label",
             "status",
+            "revocation_reason",
             "is_current",
             "last_seen_at",
             "revoked_at",

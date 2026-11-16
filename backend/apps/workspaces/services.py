@@ -160,6 +160,12 @@ def set_member_status(
             workspace=actor.workspace,
             metadata={"from": previous, "to": status},
         )
+        if status == MembershipStatus.REMOVED:
+            # Removal ends this member's device authorisations. Reinstatement
+            # does not restore them: see device_services.reauthorize_workspace_device.
+            from .device_services import revoke_devices_of_removed_member
+
+            revoke_devices_of_removed_member(membership=membership, by=actor.user)
     return membership
 
 

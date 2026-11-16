@@ -27,6 +27,7 @@ WORKSPACE_ENDPOINTS = [
     Endpoint(_BASE + "members/<uuid:membership_id>/", "patch", {"role": "attendant"}),
     Endpoint(_BASE + "devices/", "get"),
     Endpoint(_BASE + "devices/<uuid:device_id>/revoke/", "post"),
+    Endpoint(_BASE + "devices/<uuid:device_id>/reauthorize/", "post"),
     Endpoint(_BASE + "sync/handshake/", "post"),
 ]
 

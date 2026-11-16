@@ -128,6 +128,11 @@ class WorkspaceDeviceStatus(models.TextChoices):
     REVOKED = "revoked", "Revoked"
 
 
+class DeviceRevocationReason(models.TextChoices):
+    MANUAL = "manual", "Revoked by a person"
+    MEMBERSHIP_REMOVED = "membership_removed", "Member removed from the workspace"
+
+
 class WorkspaceDevice(UUIDModel, TimestampedModel, WorkspaceOwnedModel):
     """Authorisation of one browser installation to work in one workspace.
 
@@ -155,6 +160,10 @@ class WorkspaceDevice(UUIDModel, TimestampedModel, WorkspaceOwnedModel):
         on_delete=models.PROTECT,
         related_name="revoked_workspace_devices",
     )
+    # NULL (not "") while active, so the check constraint can tie it to status.
+    revocation_reason = models.CharField(  # noqa: DJ001
+        max_length=32, choices=DeviceRevocationReason.choices, null=True, blank=True
+    )
 
     class Meta:
         ordering = ["-created_at"]
@@ -165,10 +174,20 @@ class WorkspaceDevice(UUIDModel, TimestampedModel, WorkspaceOwnedModel):
             ),
             models.CheckConstraint(
                 condition=(
-                    Q(status="active", revoked_at__isnull=True, revoked_by__isnull=True)
-                    | Q(status="revoked", revoked_at__isnull=False, revoked_by__isnull=False)
+                    Q(
+                        status="active",
+                        revoked_at__isnull=True,
+                        revoked_by__isnull=True,
+                        revocation_reason__isnull=True,
+                    )
+                    | Q(
+                        status="revoked",
+                        revoked_at__isnull=False,
+                        revoked_by__isnull=False,
+                        revocation_reason__in=DeviceRevocationReason.values,
+                    )
                 ),
-                name="workspace_device_revocation_consistent",
+                name="workspace_device_revocation_consistent_v2",
             ),
         ]
 
