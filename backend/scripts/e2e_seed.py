@@ -73,6 +73,21 @@ def seed() -> None:
     add_member(actor=akwa_owner, user=person("lock@example.test", "Lock Test"), role="affiliate")
 
 
+def grant_to_runtime_role() -> None:
+    """With --grant-to ROLE (run as the owner role), grant the runtime role its
+    privileges, so the server under test can run as a least-privilege role."""
+    if "--grant-to" not in sys.argv:
+        return
+    from django.db import connection
+
+    from apps.common.database_roles import grant_runtime_privileges
+
+    role = sys.argv[sys.argv.index("--grant-to") + 1]
+    with connection.cursor() as cursor:
+        grant_runtime_privileges(cursor, role)
+    print(f"Granted runtime privileges to {role}")  # noqa: T201
+
+
 if __name__ == "__main__":
     ensure_database(settings.DATABASES["default"])
     call_command("migrate", interactive=False, verbosity=0)
@@ -81,4 +96,5 @@ if __name__ == "__main__":
     with audit_protection_suspended():  # throwaway database: audit rows may go
         call_command("flush", interactive=False, verbosity=0)
     seed()
+    grant_to_runtime_role()
     print(f"Seeded {settings.DATABASES['default']['NAME']}")  # noqa: T201

@@ -82,9 +82,27 @@ jobs:
           --health-interval 5s --health-timeout 3s --health-retries 10
     env:
       E2E_PYTHON: python
-      E2E_DATABASE_URL: postgres://merchantflow:ci_only_password@127.0.0.1:5432/merchantflow_e2e
+      # The server under test runs as a least-privilege runtime role; the owner
+      # role migrates and seeds (see frontend/playwright.config.ts).
+      E2E_RUNTIME_ROLE: mf_runtime
+      SUPERUSER_URL: postgres://merchantflow:ci_only_password@127.0.0.1:5432/merchantflow
+      DB_NAME: merchantflow_e2e
     steps:
       - uses: actions/checkout@v4
+      - name: Create separate owner and runtime database roles
+        run: |
+          OWNER_PW="$(openssl rand -hex 16)"; RUNTIME_PW="$(openssl rand -hex 16)"
+          echo "::add-mask::$OWNER_PW"; echo "::add-mask::$RUNTIME_PW"
+          psql "$SUPERUSER_URL" -v ON_ERROR_STOP=1 \
+            -c "CREATE ROLE mf_owner LOGIN PASSWORD '$OWNER_PW'" \
+            -c "CREATE ROLE mf_runtime LOGIN PASSWORD '$RUNTIME_PW'" \
+            -c "CREATE DATABASE $DB_NAME OWNER mf_owner"
+          echo "OWNER_URL=postgres://mf_owner:$OWNER_PW@127.0.0.1:5432/$DB_NAME" >> "$GITHUB_ENV"
+          echo "RUNTIME_URL=postgres://mf_runtime:$RUNTIME_PW@127.0.0.1:5432/$DB_NAME" >> "$GITHUB_ENV"
+      - name: Point the browser tests at the two roles
+        run: |
+          echo "E2E_OWNER_DATABASE_URL=$OWNER_URL" >> "$GITHUB_ENV"
+          echo "E2E_DATABASE_URL=$RUNTIME_URL" >> "$GITHUB_ENV"
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
@@ -108,3 +126,66 @@ jobs:
           name: playwright-report
           path: frontend/playwright-report
           retention-days: 7
+
+  database-roles:
+    # Separate LOGIN roles, as in production: the owner migrates, the runtime
+    # role (what the application uses) must not be able to touch audit or
+    # ownership protection. Passwords are generated per run and never committed.
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: merchantflow
+          POSTGRES_USER: merchantflow
+          POSTGRES_PASSWORD: ci_only_password
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U merchantflow"
+          --health-interval 5s --health-timeout 3s --health-retries 10
+    env:
+      DJANGO_ENVIRONMENT: test
+      DJANGO_SECRET_KEY: insecure-ci-only
+      DJANGO_DEBUG: "true"
+      SUPERUSER_URL: postgres://merchantflow:ci_only_password@127.0.0.1:5432/merchantflow
+      DB_NAME: merchantflow_roles
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+      - run: pip install -r requirements.txt
+      - name: Create separate owner and runtime database roles
+        run: |
+          OWNER_PW="$(openssl rand -hex 16)"; RUNTIME_PW="$(openssl rand -hex 16)"
+          echo "::add-mask::$OWNER_PW"; echo "::add-mask::$RUNTIME_PW"
+          psql "$SUPERUSER_URL" -v ON_ERROR_STOP=1 \
+            -c "CREATE ROLE mf_owner LOGIN PASSWORD '$OWNER_PW'" \
+            -c "CREATE ROLE mf_runtime LOGIN PASSWORD '$RUNTIME_PW'" \
+            -c "CREATE DATABASE $DB_NAME OWNER mf_owner"
+          echo "OWNER_URL=postgres://mf_owner:$OWNER_PW@127.0.0.1:5432/$DB_NAME" >> "$GITHUB_ENV"
+          echo "RUNTIME_URL=postgres://mf_runtime:$RUNTIME_PW@127.0.0.1:5432/$DB_NAME" >> "$GITHUB_ENV"
+      - name: Migrate as the owner role
+        run: DATABASE_URL="$OWNER_URL" python manage.py migrate --no-input
+      - name: Grant runtime privileges, as the owner role
+        run: DATABASE_URL="$OWNER_URL" python manage.py grant_runtime_privileges --role mf_runtime
+      - name: The runtime role passes verification
+        run: DATABASE_URL="$RUNTIME_URL" python manage.py verify_database_roles
+      - name: The owner role fails verification (negative control)
+        run: |
+          if DATABASE_URL="$OWNER_URL" python manage.py verify_database_roles; then
+            echo "The owner role was accepted as a runtime role"; exit 1
+          fi
+      - name: Runtime role boundaries (forbidden actions refused, required ones work)
+        run: DATABASE_URL="$RUNTIME_URL" python scripts/verify_runtime_role_boundaries.py
+      - name: Production deploy check, connected as the runtime role
+        run: |
+          set -a; . ./.env.production.example; set +a
+          DJANGO_SECRET_KEY="$(python -c 'import secrets; print(secrets.token_urlsafe(64))')" \
+          DATABASE_URL="$RUNTIME_URL" \
+            python manage.py check --deploy --database default --fail-level WARNING

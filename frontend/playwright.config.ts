@@ -10,6 +10,14 @@ const PYTHON = process.env.E2E_PYTHON ?? ".venv/bin/python";
 const DATABASE_URL =
   process.env.E2E_DATABASE_URL ??
   "postgres://merchantflow:merchantflow_dev@127.0.0.1:5432/merchantflow_e2e";
+// Optional least-privilege mode (used in CI): the owner role migrates and seeds,
+// then the server runs as the runtime role, which owns nothing. Without these
+// the single development role does both.
+const OWNER_DATABASE_URL = process.env.E2E_OWNER_DATABASE_URL ?? DATABASE_URL;
+const RUNTIME_ROLE = process.env.E2E_RUNTIME_ROLE;
+const SEED =
+  `DATABASE_URL='${OWNER_DATABASE_URL}' ${PYTHON} scripts/e2e_seed.py` +
+  (RUNTIME_ROLE ? ` --grant-to ${RUNTIME_ROLE}` : "");
 
 export default defineConfig({
   testDir: "./e2e",
@@ -29,7 +37,7 @@ export default defineConfig({
   projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"] } }],
   webServer: [
     {
-      command: `${PYTHON} scripts/e2e_seed.py && ${PYTHON} manage.py runserver 127.0.0.1:${BACKEND_PORT} --noreload`,
+      command: `${SEED} && ${PYTHON} manage.py runserver 127.0.0.1:${BACKEND_PORT} --noreload`,
       cwd: "../backend",
       url: `http://127.0.0.1:${BACKEND_PORT}/api/health/`,
       reuseExistingServer: false,

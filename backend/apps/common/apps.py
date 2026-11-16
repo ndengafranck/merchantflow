@@ -6,4 +6,4 @@ class CommonConfig(AppConfig):
     label = "common"
 
     def ready(self) -> None:
-        from . import schema  # noqa: F401  (registers the OpenAPI auth scheme)
+        from . import checks, schema  # noqa: F401  (registers the deploy check and OpenAPI scheme)
