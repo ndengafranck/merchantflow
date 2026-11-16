@@ -13,13 +13,14 @@ from django.core.exceptions import ImproperlyConfigured
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 env = environ.Env()
-# A local .env file is a development convenience; real environment variables win.
-environ.Env.read_env(BASE_DIR / ".env")
+# A local .env file is a development convenience; real environment variables
+# win. Deployments (and tests of production settings) set
+# DJANGO_READ_DOT_ENV=false so a stray file cannot fill in missing values.
+if env.bool("DJANGO_READ_DOT_ENV", default=True):
+    environ.Env.read_env(BASE_DIR / ".env")
 
 DEBUG = env.bool("DJANGO_DEBUG", default=False)
 SECRET_KEY = env.str("DJANGO_SECRET_KEY")
-if not DEBUG and SECRET_KEY.startswith("insecure-"):
-    raise ImproperlyConfigured("DJANGO_SECRET_KEY must be replaced when DJANGO_DEBUG is false.")
 
 ALLOWED_HOSTS = env.list("DJANGO_ALLOWED_HOSTS", default=[])
 
@@ -47,6 +48,7 @@ MIDDLEWARE = [
     "django.contrib.auth.middleware.AuthenticationMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
+    "apps.common.middleware.ApiSecurityHeadersMiddleware",
 ]
 
 ROOT_URLCONF = "config.urls"
@@ -112,7 +114,13 @@ CSRF_TRUSTED_ORIGINS = env.list("DJANGO_CSRF_TRUSTED_ORIGINS", default=[])
 CSRF_FAILURE_VIEW = "apps.common.views.csrf_failure"
 
 # --- Transport security --------------------------------------------------
-SECURE_SSL_REDIRECT = env.bool("DJANGO_SECURE_SSL_REDIRECT", default=False)
+# On by default whenever DEBUG is off; production_checks refuses to turn them off.
+SECURE_SSL_REDIRECT = env.bool("DJANGO_SECURE_SSL_REDIRECT", default=not DEBUG)
+SECURE_HSTS_SECONDS = env.int("DJANGO_HSTS_SECONDS", default=0 if DEBUG else 60 * 60 * 24 * 365)
+SECURE_HSTS_INCLUDE_SUBDOMAINS = env.bool("DJANGO_HSTS_INCLUDE_SUBDOMAINS", default=False)
+SECURE_HSTS_PRELOAD = env.bool("DJANGO_HSTS_PRELOAD", default=False)
+# Health checks come from the load balancer over plain HTTP inside the network.
+SECURE_REDIRECT_EXEMPT = [r"^api/health/$"]
 SECURE_CONTENT_TYPE_NOSNIFF = True
 SECURE_REFERRER_POLICY = "same-origin"
 X_FRAME_OPTIONS = "DENY"
@@ -168,6 +176,34 @@ SPECTACULAR_SETTINGS = {
         "DeviceStatusEnum": "apps.workspaces.models.WorkspaceDeviceStatus",
     },
 }
+
+# --- Production safeguards ----------------------------------------------------
+# Submitting the domain to the browsers' HSTS preload list is a one-way
+# operational decision, so it is opt-in (DJANGO_HSTS_PRELOAD) rather than
+# a deploy-check failure.
+SILENCED_SYSTEM_CHECKS = ["security.W021"]
+
+if not DEBUG:
+    from config.production_checks import SecuritySettings, production_problems
+
+    _problems = production_problems(
+        SecuritySettings(
+            secret_key=SECRET_KEY,
+            secure_cookies=SECURE_COOKIES,
+            allowed_hosts=ALLOWED_HOSTS,
+            csrf_trusted_origins=CSRF_TRUSTED_ORIGINS,
+            trusted_proxy_count=TRUSTED_PROXY_COUNT,
+            trusted_proxy_count_is_explicit="DJANGO_TRUSTED_PROXY_COUNT" in env.ENVIRON,
+            ssl_redirect=SECURE_SSL_REDIRECT,
+            hsts_seconds=SECURE_HSTS_SECONDS,
+            admin_enabled=ADMIN_ENABLED,
+            admin_path=ADMIN_PATH,
+        )
+    )
+    if _problems:
+        raise ImproperlyConfigured(
+            "Unsafe production settings (DJANGO_DEBUG is false):\n- " + "\n- ".join(_problems)
+        )
 
 # --- Internationalisation ---------------------------------------------------
 LANGUAGE_CODE = "en"

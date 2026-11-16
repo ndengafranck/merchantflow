@@ -40,6 +40,11 @@ jobs:
       - run: python manage.py makemigrations --check --dry-run
       - run: python manage.py migrate --no-input
       - run: python manage.py spectacular --validate --fail-on-warn --file /dev/null
+      - name: Production settings pass the deploy check
+        run: |
+          set -a; . ./.env.production.example; set +a
+          DJANGO_SECRET_KEY="$(python -c 'import secrets; print(secrets.token_urlsafe(64))')" \
+            python manage.py check --deploy --fail-level WARNING
       - run: pytest
 
   frontend:
