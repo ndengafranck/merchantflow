@@ -201,8 +201,11 @@ def test_admin_deactivation_of_a_non_owner_is_allowed_and_audited(operator, shop
     assert response.status_code == 302
     member.refresh_from_db()
     assert not member.is_active
-    event = AuditEvent.objects.get(action="user.updated", target_id=member.pk)
-    assert event.metadata["changes"] == {"is_active": "False"}
+    # Deactivation goes through the account lifecycle service (C5).
+    event = AuditEvent.objects.get(action="user.deactivated", target_id=member.pk)
+    assert event.actor == operator.user
+    assert event.metadata["reason"] == "Deactivated in the Django admin"
+    assert not AuditEvent.objects.filter(action="user.updated", target_id=member.pk).exists()
 
 
 def test_password_set_in_the_admin_is_audited_without_the_password(operator, shop):
@@ -218,3 +221,61 @@ def test_password_set_in_the_admin_is_audited_without_the_password(operator, sho
     assert response.status_code == 302
     event = AuditEvent.objects.get(action="user.password_set", target_id=member.pk)
     assert "Another-long-pass-42" not in str(event.metadata)
+
+
+# --- C5: accounts cannot be deleted through the admin ------------------------------------
+
+
+def test_admin_cannot_delete_a_user(operator, shop):
+    member = shop.affiliate.user
+    delete_url = f"/admin/accounts/user/{member.pk}/delete/"
+    assert operator.get(delete_url).status_code == 403
+    assert operator.post(delete_url, {"post": "yes"}).status_code == 403
+    assert type(member).objects.filter(pk=member.pk).exists()
+
+
+def test_admin_cannot_bulk_delete_users(operator, make_user):
+    target = make_user()
+    changelist = operator.get("/admin/accounts/user/")
+    assert changelist.status_code == 200
+    assert "delete_selected" not in changelist.content.decode()
+    response = operator.post(
+        "/admin/accounts/user/",
+        {"action": "delete_selected", "_selected_action": [str(target.pk)], "post": "yes"},
+    )
+    assert response.status_code in (200, 302)
+    assert type(target).objects.filter(pk=target.pk).exists()
+
+
+def test_deleting_a_user_without_history_is_also_refused(operator, make_user):
+    """The case the review found: no protected rows, so only the permission stops it."""
+    loner = make_user()
+    response = operator.post(f"/admin/accounts/user/{loner.pk}/delete/", {"post": "yes"})
+    assert response.status_code == 403
+    assert type(loner).objects.filter(pk=loner.pk).exists()
+
+
+def test_admin_deactivation_ends_the_accounts_sessions(operator, shop):
+    from rest_framework.test import APIClient
+
+    from apps.accounts.models import UserSession
+
+    from .conftest import sign_in
+
+    member = shop.affiliate.user
+    phone = APIClient()
+    sign_in(phone, member)
+    assert phone.get("/api/v1/auth/me/").status_code == 200
+    response = operator.post(
+        f"/admin/accounts/user/{member.pk}/change/",
+        user_form(member, is_active=None, full_name="Renamed Member"),
+    )
+    assert response.status_code == 302
+    assert not UserSession.objects.filter(user=member).exists()
+    assert phone.get("/api/v1/auth/me/").status_code == 401
+    member.refresh_from_db()
+    assert (member.is_active, member.full_name) == (False, "Renamed Member")
+    updated = AuditEvent.objects.get(action="user.updated", target_id=member.pk)
+    assert updated.metadata["changes"] == {"full_name": "Renamed Member"}
+    deactivated = AuditEvent.objects.get(action="user.deactivated", target_id=member.pk)
+    assert deactivated.metadata["sessions_ended"] == 1

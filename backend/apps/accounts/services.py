@@ -40,7 +40,12 @@ def owned_workspace_names(user: User) -> list[str]:
 
 @transaction.atomic
 def deactivate_user(*, user_id, by: User | None, reason: str) -> User:
-    """Suspend an account platform-wide. Its sessions stop working at once.
+    """Suspend an account platform-wide and end all of its sessions.
+
+    The approved way to take an account out of use (the Django admin calls it;
+    accounts are never deleted). Browser installations are kept, so a later
+    reactivation does not resurrect old sessions but the user's browsers are
+    still recognised.
 
     Refused while the account owns a non-archived workspace: ownership must be
     transferred first, or the workspace would have an owner who cannot sign in.
@@ -57,5 +62,14 @@ def deactivate_user(*, user_id, by: User | None, reason: str) -> User:
         )
     user.is_active = False
     user.save(update_fields=["is_active"])
-    record_event(action="user.deactivated", target=user, actor=by, metadata={"reason": reason})
+    # End every session now, rather than leaving rows that are merely refused.
+    from .models import UserSession
+
+    ended, _ = UserSession.objects.filter(user=user).delete()
+    record_event(
+        action="user.deactivated",
+        target=user,
+        actor=by,
+        metadata={"reason": reason, "sessions_ended": ended},
+    )
     return user

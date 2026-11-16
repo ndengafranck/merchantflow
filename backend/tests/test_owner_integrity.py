@@ -119,7 +119,10 @@ def test_deactivate_user_works_for_members_and_ends_their_sessions(shop):
     assert client.get("/api/v1/auth/me/").status_code == 401
     events = AuditEvent.objects.filter(action="user.deactivated", target_id=shop.affiliate.user_id)
     assert events.count() == 1
-    assert events.get().metadata == {"reason": "left the shop"}
+    assert events.get().metadata == {"reason": "left the shop", "sessions_ended": 1}
+    from apps.accounts.models import UserSession
+
+    assert not UserSession.objects.filter(user_id=shop.affiliate.user_id).exists()
 
 
 def test_owner_can_be_deactivated_after_transferring_ownership(shop):

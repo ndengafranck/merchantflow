@@ -6,7 +6,7 @@ from django.contrib.auth.forms import UserChangeForm
 from apps.audit.services import record_event
 
 from .models import DeviceInstallation, User
-from .services import owned_workspace_names
+from .services import deactivate_user, owned_workspace_names
 
 
 class MerchantFlowUserChangeForm(UserChangeForm):
@@ -43,9 +43,23 @@ class UserAdmin(DjangoUserAdmin):
         (None, {"fields": ["email", "full_name", "password1", "password2"]}),
     ]
 
+    def has_delete_permission(self, request, obj=None) -> bool:
+        # Accounts are deactivated, never deleted: deletion would erase a person
+        # without an audit record. Also removes the bulk "delete selected" action.
+        return False
+
     def save_model(self, request, obj, form, change) -> None:
+        deactivating = change and "is_active" in form.changed_data and not obj.is_active
+        if deactivating:
+            # Save the other edits first; deactivation itself goes through the
+            # account lifecycle service (owner check, sessions ended, audited).
+            obj.is_active = True
         super().save_model(request, obj, form, change)
-        changed = [f for f in form.changed_data if f != "password"]
+        changed = [
+            f
+            for f in form.changed_data
+            if f != "password" and not (deactivating and f == "is_active")
+        ]
         if change and changed:
             record_event(
                 action="user.updated",
@@ -60,6 +74,11 @@ class UserAdmin(DjangoUserAdmin):
             record_event(
                 action="user.created", target=obj, actor=request.user, metadata={"channel": "admin"}
             )
+        if deactivating:
+            deactivate_user(
+                user_id=obj.pk, by=request.user, reason="Deactivated in the Django admin"
+            )
+            obj.is_active = False
 
     def user_change_password(self, request, id, form_url=""):
         response = super().user_change_password(request, id, form_url)
