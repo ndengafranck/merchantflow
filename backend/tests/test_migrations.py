@@ -26,6 +26,11 @@ def test_legacy_devices_become_installations_and_workspace_devices():
         workspace = old.get_model("workspaces", "Workspace").objects.create(
             name="Legacy Shop", slug="legacy-shop"
         )
+        # Every real workspace has an owner; the ownership migration (0005)
+        # refuses to run over data that does not, which this test migrates past.
+        old.get_model("workspaces", "WorkspaceMembership").objects.create(
+            workspace=workspace, user=user, role="owner"
+        )
         Device = old.get_model("devices", "Device")
         now = timezone.now()
         active = Device.objects.create(

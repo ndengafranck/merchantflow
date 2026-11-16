@@ -258,6 +258,11 @@ def test_existing_revocations_are_backfilled_as_manual():
         workspace = old.get_model("workspaces", "Workspace").objects.create(
             name="Mig Shop", slug="mig-shop"
         )
+        # Every real workspace has an owner; the ownership migration (0005)
+        # refuses to run over data that does not, which this test migrates past.
+        old.get_model("workspaces", "WorkspaceMembership").objects.create(
+            workspace=workspace, user=user, role="owner"
+        )
         installation = old.get_model("accounts", "DeviceInstallation").objects.create(
             user=user, label="x"
         )
