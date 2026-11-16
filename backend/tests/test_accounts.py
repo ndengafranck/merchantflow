@@ -102,14 +102,15 @@ def test_deactivated_user_loses_existing_session(make_user):
     assert client.get(ME).status_code == 401
 
 
-def test_login_is_rate_limited(make_user, settings):
-    from rest_framework.throttling import ScopedRateThrottle
+def test_repeated_failures_are_refused_with_429(make_user):
+    """Detailed behaviour is in test_login_protection.py."""
+    from django.conf import settings
 
-    limit = int(ScopedRateThrottle.THROTTLE_RATES["login"].split("/")[0])
+    user = make_user()
     client = APIClient()
-    payload = {"email": "nobody@example.test", "password": "wrong-password"}
-    for _ in range(limit):
+    payload = {"email": user.email, "password": "wrong-password"}
+    for _ in range(settings.LOGIN_PROTECTION["ACCOUNT_AND_ADDRESS"]):
         assert client.post(LOGIN, payload).status_code == 401
     response = client.post(LOGIN, payload)
     assert response.status_code == 429
-    assert response.json()["code"] == "throttled"
+    assert response.json()["code"] == "too_many_attempts"

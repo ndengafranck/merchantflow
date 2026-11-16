@@ -41,8 +41,6 @@ export default defineConfig({
         DJANGO_ALLOWED_HOSTS: "localhost,127.0.0.1",
         DJANGO_CSRF_TRUSTED_ORIGINS: ORIGIN,
         DJANGO_SECURE_COOKIES: "false",
-        // Every test signs in; the production limit would throttle the suite.
-        LOGIN_THROTTLE_RATE: "1000/min",
       },
     },
     {

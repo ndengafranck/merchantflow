@@ -116,9 +116,28 @@ SECURE_SSL_REDIRECT = env.bool("DJANGO_SECURE_SSL_REDIRECT", default=False)
 SECURE_CONTENT_TYPE_NOSNIFF = True
 SECURE_REFERRER_POLICY = "same-origin"
 X_FRAME_OPTIONS = "DENY"
-if env.bool("DJANGO_BEHIND_TLS_PROXY", default=False):
+
+# --- Reverse proxy and sign-in protection ------------------------------------
+# How many reverse proxies in front of Django are trusted to append the client
+# address to X-Forwarded-For. 0 = ignore the header (development, or Django
+# reached directly). Must match the real deployment exactly: too high lets
+# clients forge their address, too low makes every client look like the proxy.
+TRUSTED_PROXY_COUNT = env.int("DJANGO_TRUSTED_PROXY_COUNT", default=0)
+if TRUSTED_PROXY_COUNT > 0:
+    # The outermost trusted proxy terminates TLS and says so in this header.
     SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
-    SECURE_HSTS_SECONDS = 60 * 60 * 24 * 30
+
+# Failed sign-in attempts allowed per window (see apps/accounts/login_protection.py).
+LOGIN_PROTECTION = {
+    "WINDOW_SECONDS": env.int("LOGIN_WINDOW_SECONDS", default=15 * 60),
+    "ACCOUNT_AND_ADDRESS": env.int("LOGIN_MAX_FAILURES_ACCOUNT_ADDRESS", default=5),
+    "ACCOUNT": env.int("LOGIN_MAX_FAILURES_ACCOUNT", default=20),
+    "ADDRESS": env.int("LOGIN_MAX_FAILURES_ADDRESS", default=100),
+}
+
+# --- Django admin ------------------------------------------------------------
+ADMIN_ENABLED = env.bool("DJANGO_ADMIN_ENABLED", default=DEBUG)
+ADMIN_PATH = env.str("DJANGO_ADMIN_PATH", default="admin/")
 
 # --- API ------------------------------------------------------------------
 API_DOCS_ENABLED = env.bool("API_DOCS_ENABLED", default=DEBUG)
@@ -131,7 +150,8 @@ REST_FRAMEWORK = {
     "DEFAULT_PARSER_CLASSES": ["rest_framework.parsers.JSONParser"],
     "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
     "EXCEPTION_HANDLER": "apps.common.api_errors.api_exception_handler",
-    "DEFAULT_THROTTLE_RATES": {"login": env.str("LOGIN_THROTTLE_RATE", default="10/min")},
+    # Same trust rule as apps.common.net.client_ip, for any DRF throttle added later.
+    "NUM_PROXIES": TRUSTED_PROXY_COUNT,
     "TEST_REQUEST_DEFAULT_FORMAT": "json",
 }
 

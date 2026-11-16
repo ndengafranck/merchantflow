@@ -158,3 +158,23 @@ class UserSession(AbstractBaseSession):
         from .session_store import SessionStore
 
         return SessionStore
+
+
+class LoginAttemptBucket(models.Model):
+    """Failed sign-in attempts for one key within one time window.
+
+    Kept in PostgreSQL so every application process shares the counts. Keys
+    are opaque (HMAC of the identifier and/or a network address), so the
+    table holds no email addresses or phone numbers. Rows with an expired
+    window are meaningless and are removed by ``manage.py purge_login_attempts``.
+    """
+
+    key = models.CharField(max_length=128, primary_key=True)
+    window_started_at = models.DateTimeField()
+    failures = models.PositiveIntegerField(default=0)
+
+    class Meta:
+        indexes = [models.Index(fields=["window_started_at"], name="login_bucket_window_idx")]
+
+    def __str__(self) -> str:
+        return f"{self.key}: {self.failures}"
