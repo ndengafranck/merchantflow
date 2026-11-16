@@ -164,3 +164,60 @@ authorisation is tenant access control (`workspaces`), next to the guard that
 enforces it. This keeps dependencies one-directional. `apps.devices` retains
 its migration history and serves the device and sync endpoints. It can be
 folded away when migrations are squashed.
+
+## D-025 Sign-in limits count failures in PostgreSQL (M2.1, F-01/F-02)
+Three counters of failed attempts per 15-minute window: account + address
+(5), account (20), address (100). An attempt reserves a failure in each before
+the password is checked; correct sign-ins and refused attempts are refunded,
+and a success clears that account + address counter. Stored in a table
+(`accounts.LoginAttemptBucket`) with atomic upserts rather than Django's cache
+because the cache's increment is not atomic across processes and the
+database is already shared; no new dependency. Keys are HMACs, so the table
+holds no identifiers. **Cost:** someone guessing from 4+ addresses can lock an
+account for one window (O-023). One write per sign-in attempt.
+
+## D-026 One trusted-proxy setting decides client addresses
+`DJANGO_TRUSTED_PROXY_COUNT` drives `apps.common.net.client_ip`, DRF's
+`NUM_PROXIES` and `SECURE_PROXY_SSL_HEADER`. With 0, `X-Forwarded-For` is
+ignored entirely. IPv6 clients are limited per /64.
+
+## D-027 The admin is off unless enabled, and cannot change memberships
+`DJANGO_ADMIN_ENABLED` (default: debug only) and `DJANGO_ADMIN_PATH`. The
+admin sign-in shares the API's failure counters. Memberships are view-only;
+roles, statuses and ownership change only through services. Admin edits to
+users and workspaces, and passwords set by operators, are audited. An admin
+session is not bound to a browser installation and so cannot call the API.
+
+## D-028 Device actions follow role rank (F-04)
+Rank: owner 3, manager 2, attendant and affiliate 1. A member may act on their
+own devices; acting on another member's device needs `devices.manage` and a
+strictly higher rank. Refusals are reported as not found.
+
+## D-029 Removal revokes devices; only explicit re-authorisation restores (F-05)
+Removing a member revokes their devices in that workspace with
+`revocation_reason = membership_removed`, in the same transaction. Suspension
+does not (assessment Q9 default). Reinstatement leaves them revoked; the new
+`POST …/devices/{id}/reauthorize/` (rank-checked, audited, refused while the
+member is not active or the browser was signed out everywhere) is the only
+way back. First-entry authorisation locks the membership so it cannot race a
+removal. Supersedes the "a revoked row is final" part of D-017.
+
+## D-030 Audit rows are append-only in PostgreSQL (F-07)
+Row triggers refuse `UPDATE`/`DELETE`; a statement trigger refuses
+`TRUNCATE`, including cascades. Only the table owner can suspend them; tests
+and the e2e seed do so explicitly to wipe throwaway databases. See
+DEPLOYMENT.md for the role split that makes this hold against the application.
+
+## D-031 Ownership is checked by the database at commit (F-10/F-11)
+Deferred constraint triggers require every workspace to have exactly one
+active owner membership whose account is active (archived workspaces are
+exempt from the account rule). A trigger refuses deactivating an account
+that owns a non-archived workspace. `transfer_ownership` locks the
+successor's account row so it serialises with `deactivate_user`.
+
+## D-032 Unsafe production settings stop start-up (F-06)
+`config/production_checks.py` lists every violated rule and the settings
+module raises `ImproperlyConfigured`. HTTPS redirect and HSTS default on
+outside debug; `security.W021` (HSTS preload) is silenced because submitting
+to the preload list is an operator decision. `DJANGO_READ_DOT_ENV=false`
+stops servers reading stray `.env` files.

@@ -80,6 +80,42 @@ reviewed. The CI workflow passes on GitHub.
 - The remaining review findings are listed with their status in
   `docs/MILESTONE_1_REVIEW.md`.
 
+## Milestone 2.1: Security hardening — done, awaiting review
+
+Source of truth: `docs/MILESTONE_2_ASSESSMENT.md`. Status per finding is
+appended to that document.
+
+| Finding | Resolution | Tests |
+|---|---|---|
+| F-01, F-02 | Failure-only sign-in limits in PostgreSQL; trusted-proxy setting | `test_login_protection.py`, `e2e/auth.spec.ts` |
+| F-03 | Admin off by default, protected sign-in, view-only memberships, audited edits | `test_admin.py` |
+| F-04 | Rank rule for device actions | `test_device_lifecycle.py` |
+| F-05 | Removal revokes devices; explicit re-authorisation | `test_device_lifecycle.py` |
+| F-06 | Start-up refusal of unsafe settings; deploy check in CI | `test_production_settings.py`, CI step |
+| F-07 | Append-only audit triggers | `test_audit_integrity.py` |
+| F-10, F-11 | Ownership triggers, `deactivate_user`, successor lock | `test_owner_integrity.py` |
+
+### Upgrade notes
+- Migrations: `accounts.0003` (sign-in counters), `workspaces.0004` (device
+  revocation reason, backfilled `manual`), `audit.0002` (append-only
+  triggers), `workspaces.0005` (ownership triggers). All reversible.
+  `workspaces.0005` assumes every existing workspace already has exactly one
+  active owner with an active account; check before migrating (query in the
+  M2.1 report).
+- `LOGIN_THROTTLE_RATE` and `DJANGO_BEHIND_TLS_PROXY` are gone; use
+  `DJANGO_TRUSTED_PROXY_COUNT` and the `LOGIN_*` settings.
+- Schedule `purge_login_attempts` and `clearsessions` (DEPLOYMENT.md).
+
+### Planned for M2.2 (from the assessment)
+- **F-08** sessions: add `created_at`/`last_activity_at` to `UserSession`,
+  enforce idle and absolute limits in `SessionAuthentication`, endpoints to
+  list sessions, end one, and end all others.
+- **F-09** re-authentication: a recent-authentication timestamp in the session
+  and `POST /auth/reauthenticate/`, required for password change, ending other
+  sessions or installations, role changes and ownership transfer.
+Neither was needed by M2.1; the session store already records user and
+installation, which both build on.
+
 ## Milestone 2: Catalogue and people (proposed)
 
 Products (name, SKU, description, reference, cost and minimum prices, status,

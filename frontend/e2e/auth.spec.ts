@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { api, expectDashboard, signIn, workspaceId } from "./helpers";
+import { api, expectDashboard, PASSWORD, signIn, workspaceId } from "./helpers";
 
 test("anonymous visitor is sent to login and sees server errors", async ({ page }) => {
   await page.goto("/");
@@ -50,5 +50,22 @@ test("signing out ends the session", async ({ page }) => {
   await expectDashboard(page, "Akwa Phones");
   await page.getByRole("button", { name: "Sign out" }).click();
   await expect(page).toHaveURL(/\/login$/);
+  expect((await api(page, "GET", "/auth/me/")).status).toBe(401);
+});
+
+test("repeated wrong passwords lock the account for a while, without revealing it", async ({
+  page,
+}) => {
+  await page.goto("/login");
+  await page.getByLabel("Email").fill("lock@example.test");
+  for (let attempt = 0; attempt < 5; attempt++) {
+    await page.getByLabel("Password").fill(`wrong-guess-${attempt}`);
+    await page.getByRole("button", { name: "Sign in" }).click();
+    await expect(page.getByRole("alert")).toHaveText("Incorrect email or password.");
+  }
+  // Now even the correct password is refused until the window ends.
+  await page.getByLabel("Password").fill(PASSWORD);
+  await page.getByRole("button", { name: "Sign in" }).click();
+  await expect(page.getByRole("alert")).toContainText("Too many failed sign-in attempts");
   expect((await api(page, "GET", "/auth/me/")).status).toBe(401);
 });

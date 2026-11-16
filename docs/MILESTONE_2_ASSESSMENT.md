@@ -791,3 +791,24 @@ The 18 assessment probes are in
 `/tmp/claude-0/-home-user-merchantflow/550de802-49bd-5b40-8fd2-3ecf53545345/scratchpad/m2probe/test_m2_probes.py`
 (outside the repository, not committed). In M2.1 and later phases each
 confirmed probe becomes a regression test asserting the corrected behaviour.
+
+---
+
+## Status after M2.1 (security hardening)
+
+Appended after implementation; the assessment above is unchanged.
+
+| Finding | Status | Regression tests |
+|---|---|---|
+| F-01 Forged `X-Forwarded-For` bypass | **Resolved** | `test_login_protection.py::test_forged_forwarded_header_does_not_buy_more_attempts`, `::test_client_ip_trusts_only_the_configured_proxies`, `::test_behind_one_trusted_proxy_the_appended_address_is_limited` |
+| F-02 Per-account limit, successes counted, per-process store | **Resolved** | `::test_distributed_guessing_against_one_account_is_limited`, `::test_correct_logins_never_consume_the_allowance`, `::test_people_sharing_a_shop_network_do_not_block_each_other`, `::test_concurrent_guesses_cannot_exceed_the_limit`, `::test_the_limit_is_shared_between_separate_processes`; `e2e/auth.spec.ts` lock-out |
+| F-03 Admin exposure and membership edits | **Resolved** | `test_admin.py` (16 tests) |
+| F-04 Manager can lock out the owner | **Resolved** | `test_device_lifecycle.py::test_manager_cannot_revoke_the_owners_device` and rank tests |
+| F-05 Removal and reinstatement vs devices | **Resolved** | `test_device_lifecycle.py::test_removal_revokes_*`, `::test_reinstatement_does_not_restore_device_access`, `::test_first_entry_cannot_slip_in_while_the_member_is_being_removed` |
+| F-06 Unsafe production settings | **Resolved** | `test_production_settings.py` (23 tests, incl. real start-up in a separate process); CI deploy-check step |
+| F-07 Mutable audit records | **Resolved** (against every application code path; against the table owner only with the role split in DEPLOYMENT.md) | `test_audit_integrity.py` |
+| F-08 Session lifetime and control | **Planned for M2.2** | — |
+| F-09 Re-authentication | **Planned for M2.2** | — |
+| F-10 No database guarantee of an owner | **Resolved** | `test_owner_integrity.py` |
+| F-11 Owner deactivation orphans workspace | **Resolved** | `test_owner_integrity.py`, `test_admin.py::test_admin_refuses_to_deactivate_a_workspace_owner` |
+| F-12, F-13, F-14 | Out of M2.1 scope, unchanged | — |

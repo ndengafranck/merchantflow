@@ -16,6 +16,8 @@ Milestone 1 review. There are no product, order or commission features yet. See 
 | [docs/OPEN_DECISIONS.md](docs/OPEN_DECISIONS.md) | Unresolved business rules |
 | [docs/IMPLEMENTATION_PLAN.md](docs/IMPLEMENTATION_PLAN.md) | Milestones and acceptance criteria |
 | [docs/MILESTONE_1_REVIEW.md](docs/MILESTONE_1_REVIEW.md) | Architecture review and the status of each finding |
+| [docs/MILESTONE_2_ASSESSMENT.md](docs/MILESTONE_2_ASSESSMENT.md) | Milestone 2 assessment, security findings and their status |
+| [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) | What a production deployment must provide |
 
 ## Prerequisites
 
@@ -95,7 +97,8 @@ cd backend && .venv/bin/python manage.py runserver 127.0.0.1:8000
 
 - Health check: http://127.0.0.1:8000/api/health/
 - API documentation (when `DJANGO_DEBUG=true`): http://127.0.0.1:8000/api/docs/
-- Internal admin: http://127.0.0.1:8000/admin/ (needs `manage.py createsuperuser`)
+- Internal admin: http://127.0.0.1:8000/admin/ (needs `manage.py createsuperuser`;
+  routed only when `DJANGO_ADMIN_ENABLED` is true, which defaults to the value of `DJANGO_DEBUG`)
 
 ## Running the frontend
 

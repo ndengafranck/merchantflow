@@ -59,6 +59,17 @@ Each login from an unrecognised browser creates an installation row.
 **Current default:** unlimited. **To decide:** a cap, and cleanup of
 installations not used for a long time.
 
+### O-023 Account lock-out by distributed guessing
+Someone failing sign-in for an account from 4 or more addresses (20 failures)
+locks that account for the rest of the 15-minute window, even for its owner
+(D-025). **To decide:** whether operators need an "unlock" action, and whether
+locked users should get a notification once a delivery channel exists.
+**Current default:** wait for the window to end.
+
+### Assessment defaults applied in M2.1
+- **Q9** Suspension blocks access but keeps devices; removal revokes them.
+- **Q11** The Django admin is off by default in production.
+
 ## Relevant to later milestones (recorded so they are not forgotten)
 
 | ID | Question | Blocks |

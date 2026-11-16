@@ -69,6 +69,8 @@ def seed() -> None:
     # Dedicated accounts for tests that revoke devices, so they cannot disturb others.
     add_member(actor=akwa_owner, user=person("jean@example.test", "Jean Mbarga"), role="attendant")
     add_member(actor=akwa_owner, user=person("sam@example.test", "Sam Biya"), role="affiliate")
+    # Only used by the sign-in lock-out test, which deliberately locks it.
+    add_member(actor=akwa_owner, user=person("lock@example.test", "Lock Test"), role="affiliate")
 
 
 if __name__ == "__main__":

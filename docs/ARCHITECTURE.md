@@ -1,7 +1,7 @@
 # Architecture
 
-This document describes what is implemented today (Milestones 0 and 1, plus
-the corrections from the Milestone 1 review) and the rules later milestones
+This document describes what is implemented today (Milestones 0 and 1, the
+corrections from the Milestone 1 review, and M2.1 security hardening) and the rules later milestones
 must follow.
 
 ## Shape of the system
@@ -103,7 +103,17 @@ browser installation**.
   otherwise be exempt. Django also rejects requests whose `Origin` is not trusted.
 - Logout deletes the server-side session.
 - Failed logins return one identical 401 for wrong password, unknown email and
-  disabled account, and are rate limited (weaknesses: review finding H-02).
+  disabled account.
+- **Guessing limits** (`accounts/login_protection.py`): failed attempts are
+  counted in PostgreSQL per account + address, per account, and per address,
+  shared by every process. An attempt reserves a failure before the password
+  is checked, so concurrent requests cannot exceed a limit; successes never
+  count. Over a limit the password is not checked and the answer is 429. The
+  client address comes from `common/net.py`, which trusts `X-Forwarded-For`
+  only for `DJANGO_TRUSTED_PROXY_COUNT` proxies.
+- The Django admin (off unless `DJANGO_ADMIN_ENABLED`) signs in through the
+  same limits; its sessions are not bound to an installation and cannot call
+  the API.
 - Passwords use Django's default PBKDF2 hashing and validators.
 - Users are identified by email, compared case-insensitively.
 
@@ -127,10 +137,14 @@ browser installation**.
   workspaces does not create several installations.
 - **Revoking an installation** (by its user) deletes its sessions in the same
   transaction. That browser is signed out everywhere.
-- **Revoking a workspace device** (by its user, or by an owner or manager of
-  that workspace) closes that one workspace to that browser. The session and
-  the user's other workspaces are unaffected. The row is never recreated, so
-  the browser cannot obtain a replacement.
+- **Revoking a workspace device** closes that one workspace to that browser.
+  The session and the user's other workspaces are unaffected. A member may
+  revoke their own devices; revoking someone else's needs `devices.manage`
+  and a strictly higher role rank (owner > manager > attendant/affiliate).
+- **Removing a member** revokes their devices in that workspace in the same
+  transaction. Reinstatement does not restore them.
+- A revoked workspace device is never recreated by use. Only an explicit,
+  rank-checked, audited **re-authorisation** reactivates it.
 - An owner cannot revoke a member's installation, because it also carries the
   member's access to other workspaces.
 - What this does not cover is stated in DECISIONS D-019.
@@ -183,8 +197,10 @@ Code asks about capabilities, not role names. The map lives in one file.
 ### Ownership
 
 Ownership has one source of truth: the membership with role `owner`. The
-database guarantees at most one owner per workspace and that the owner is
-never suspended or removed. Workspaces are only created by
+database guarantees, at every commit, that each workspace has exactly one
+active owner membership and (unless the workspace is archived) that the
+owner's account is active; an owner's account cannot be deactivated. These are
+PostgreSQL triggers, so they hold for the admin, raw SQL and future code alike. Workspaces are only created by
 `create_workspace`, which creates the owner membership in the same
 transaction. Ownership changes only through `transfer_ownership`.
 
@@ -216,8 +232,12 @@ only remembers the workspace used last, to choose where `/` leads.
 - Money will be `Decimal` / `NUMERIC`; no floating point.
 - Timestamps are stored in UTC.
 - Membership, device, installation and workspace changes made through the
-  services write an `AuditEvent` in the same transaction. Logins and changes
-  made in the Django admin are not yet audited (review finding D-03).
+  services write an `AuditEvent` in the same transaction, as do sign-in,
+  sign-out, account lock-outs and edits made in the Django admin.
+- Audit rows are append-only: PostgreSQL triggers refuse `UPDATE`, `DELETE`
+  and `TRUNCATE`. Only the table owner can suspend them (see DEPLOYMENT.md).
+- With `DJANGO_DEBUG=false` the application refuses to start on unsafe
+  security settings (`config/production_checks.py`).
 
 ## API conventions
 
