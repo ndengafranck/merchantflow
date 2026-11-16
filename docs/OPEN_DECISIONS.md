@@ -65,6 +65,9 @@ locks that account for the rest of the 15-minute window, even for its owner
 (D-025). **To decide:** whether operators need an "unlock" action, and whether
 locked users should get a notification once a delivery channel exists.
 **Current default:** wait for the window to end.
+**Update (C4):** largely mitigated. The real user's usual browser is exempt
+(D-034) and operators can clear limits (D-035). Still open: whether locked
+users should be notified once a delivery channel exists.
 
 ### Assessment defaults applied in M2.1
 - **Q9** Suspension blocks access but keeps devices; removal revokes them.

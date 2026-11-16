@@ -221,3 +221,53 @@ module raises `ImproperlyConfigured`. HTTPS redirect and HSTS default on
 outside debug; `security.W021` (HSTS preload) is silenced because submitting
 to the preload list is an operator decision. `DJANGO_READ_DOT_ENV=false`
 stops servers reading stray `.env` files.
+
+## D-033 DJANGO_ENVIRONMENT decides the security rules, not DEBUG (C2)
+Required, no default. Production rules apply whenever it is `production`,
+and production refuses `DEBUG=true` and `.env` files. Secure defaults follow
+it. Development and test refuse non-local host names (unless
+`DJANGO_ALLOW_NON_LOCAL_HOSTS`), so a production site mislabelled as
+development fails rather than running without the production rules.
+**Cost:** every existing `.env` needs one new line.
+
+## D-034 Known browsers are exempt from shared lock-outs (C4)
+OWASP "device cookie": an attempt whose `mf_device` cookie names an active
+installation of the same account is limited only by its own counter (10 per
+window) and neither blocked by nor charged to the account and address
+counters. Unknown browsers keep the three limits of D-025. This refines
+D-017: the device identifier is still not an authentication credential (the
+password is always checked), but it now relaxes lock-outs for the browser
+that holds it, so a stolen device cookie is worth at most 10 guesses per
+window. **Residual cost:** a browser never used for the account, on an
+attacked address or for an attacked account, waits for the window or an
+operator. All reservations of an attempt are one SQL statement; refunds
+another; both lock rows in key order.
+
+## D-035 Operator recovery for sign-in limits is a command only (C4)
+`manage.py clear_login_limits --email --reason`, audited. No HTTP endpoint,
+so no unauthenticated unlock exists.
+
+## D-036 Owner and runtime database roles (C3)
+The application connects as a runtime role that owns nothing and has only
+SELECT and INSERT on the audit table. `grant_runtime_privileges`,
+`verify_database_roles` and a production deploy check implement and verify
+it; CI exercises it with real LOGIN roles. Superusers and infrastructure
+operators remain outside what the application can control.
+
+## D-037 workspaces.0005 checks data before installing its triggers (C1)
+A preflight in the same transaction locks the affected tables against
+writes, runs the same rule the triggers enforce, and aborts with a report and
+remediation steps on any violation. Nothing is repaired automatically.
+Edited in place rather than added as a new migration because the check only
+matters to databases that have not yet applied 0005, and no production
+database exists. `check_workspace_owners` runs the same query at any time.
+
+## D-038 One lock order for membership and device changes (C6)
+Workspace row (FOR NO KEY UPDATE), memberships in primary-key order, devices
+in primary-key order, then accounts (`apps/workspaces/locking.py`).
+Authorisation is decided on the locked rows. Supersedes the ad-hoc locking of
+D-023 and D-031 for these operations.
+
+## D-039 Accounts are deactivated, never deleted (C5)
+The admin cannot delete users. Deactivation in the admin goes through
+`deactivate_user`, which refuses owners, ends all sessions and is audited.

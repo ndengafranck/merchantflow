@@ -106,9 +106,11 @@ browser installation**.
   disabled account.
 - **Guessing limits** (`accounts/login_protection.py`): failed attempts are
   counted in PostgreSQL per account + address, per account, and per address,
-  shared by every process. An attempt reserves a failure before the password
-  is checked, so concurrent requests cannot exceed a limit; successes never
-  count. Over a limit the password is not checked and the answer is 429. The
+  shared by every process. A browser that has already signed in to the
+  account (device cookie) is limited only by its own counter, so strangers
+  cannot lock the real user out of their usual browser. An attempt reserves
+  its failures in one SQL statement before the password is checked, so
+  concurrent requests cannot exceed a limit; successes never count. Over a limit the password is not checked and the answer is 429. The
   client address comes from `common/net.py`, which trusts `X-Forwarded-For`
   only for `DJANGO_TRUSTED_PROXY_COUNT` proxies.
 - The Django admin (off unless `DJANGO_ADMIN_ENABLED`) signs in through the
@@ -225,8 +227,13 @@ only remembers the workspace used last, to choose where `/` leads.
 - Invariants are database constraints first, service checks second.
 - Financial and operational history is never deleted: foreign keys use
   `PROTECT`, records are archived through status fields.
-- Operations that reason about existing rows lock them (`select_for_update`)
-  inside a transaction, starting with the acting membership.
+- Operations that reason about existing rows lock them inside a transaction,
+  in one fixed order for membership and device changes: workspace, then
+  memberships by primary key, then devices, then accounts
+  (`workspaces/locking.py`). Authorisation is decided on the locked rows.
+- The application connects as a **runtime role that owns nothing** (only
+  SELECT/INSERT on the audit table); migrations run as a separate owner role
+  (DEPLOYMENT.md, "Database roles"). `verify_database_roles` checks it.
 - Every write goes through a transactional service function
   (`ATOMIC_REQUESTS` is off on purpose).
 - Money will be `Decimal` / `NUMERIC`; no floating point.
@@ -236,8 +243,9 @@ only remembers the workspace used last, to choose where `/` leads.
   sign-out, account lock-outs and edits made in the Django admin.
 - Audit rows are append-only: PostgreSQL triggers refuse `UPDATE`, `DELETE`
   and `TRUNCATE`. Only the table owner can suspend them (see DEPLOYMENT.md).
-- With `DJANGO_DEBUG=false` the application refuses to start on unsafe
-  security settings (`config/production_checks.py`).
+- `DJANGO_ENVIRONMENT` (required) selects the start-up rules: with
+  `production` the application refuses to start on unsafe settings, including
+  `DEBUG=true` (`config/production_checks.py`).
 
 ## API conventions
 

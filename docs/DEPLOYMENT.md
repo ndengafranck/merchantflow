@@ -1,60 +1,127 @@
 # Deployment requirements
 
 What a production deployment must provide. The application enforces what it
-can at start-up (`backend/config/production_checks.py`); the rest is the
-operator's responsibility and is listed here. There is no deployment
-automation yet (assessment item O-01).
+can at start-up (`backend/config/production_checks.py`) and with checks you
+run during deployment; the rest is infrastructure, listed here, which the
+application **cannot verify**. There is no deployment automation yet.
 
-## Settings
+## Environment
 
-Start from `backend/.env.production.example`. With `DJANGO_DEBUG=false` the
-application refuses to start unless:
+`DJANGO_ENVIRONMENT` is required: `development`, `test` or `production`.
+Security behaviour follows it, not `DJANGO_DEBUG`:
+
+| Environment | Start-up rules |
+|---|---|
+| `production` | Every rule below; `DJANGO_DEBUG=true` is itself refused |
+| `development`, `test` | Only local host names in `DJANGO_ALLOWED_HOSTS` (localhost, private addresses, single-label names, `.localhost/.local/.internal/.test/.example`), unless `DJANGO_ALLOW_NON_LOCAL_HOSTS=true`. A production site mislabelled `development` therefore fails to start |
+
+Start from `backend/.env.production.example`. With `DJANGO_ENVIRONMENT=production`
+the application refuses to start unless:
 
 | Setting | Rule |
 |---|---|
+| `DJANGO_DEBUG` | `false` |
+| `DJANGO_READ_DOT_ENV` | `false` (configuration comes from the environment, never a file left on the server) |
 | `DJANGO_SECRET_KEY` | 50+ random characters, at least 5 distinct, not a placeholder |
 | `DJANGO_SECURE_COOKIES` | `true` |
 | `DJANGO_ALLOWED_HOSTS` | the real host names; no `*` |
 | `DJANGO_CSRF_TRUSTED_ORIGINS` | `https://` origins only |
 | `DJANGO_TRUSTED_PROXY_COUNT` | set explicitly, at least 1 |
-| `DJANGO_SECURE_SSL_REDIRECT` | `true` (default outside debug) |
-| `DJANGO_HSTS_SECONDS` | at least 180 days (default one year outside debug) |
-| `DJANGO_ADMIN_ENABLED` / `DJANGO_ADMIN_PATH` | admin off, or on at a non-default path |
+| `DJANGO_SECURE_SSL_REDIRECT` | `true` (default in production) |
+| `DJANGO_HSTS_SECONDS` | at least 180 days (default one year in production) |
+| `DJANGO_ADMIN_ENABLED` / `DJANGO_ADMIN_PATH` | admin off (default in production), or on at a non-default path |
 
-Set `DJANGO_READ_DOT_ENV=false` so no `.env` file is ever read on a server.
 CI runs `manage.py check --deploy --fail-level WARNING` with the example values.
 
-## Reverse proxy
+## Reverse proxy (infrastructure; not verifiable by the application)
 
 - One origin serves both the built SPA (`frontend/dist`) and `/api/` (and the
   admin path, if enabled). No CORS is configured or needed.
-- The **outermost** proxy terminates TLS and must **overwrite** — not append
-  to — `X-Forwarded-For` and `X-Forwarded-Proto` received from the internet.
-  `DJANGO_TRUSTED_PROXY_COUNT` must equal the number of proxies that append
-  to `X-Forwarded-For` before Django. Too high lets clients choose their own
+- The **outermost** proxy terminates TLS and must **overwrite**, not append
+  to, `X-Forwarded-For` and `X-Forwarded-Proto` received from the internet.
+- `DJANGO_TRUSTED_PROXY_COUNT` must equal the number of proxies that append to
+  `X-Forwarded-For` before Django. Too high lets clients choose their own
   address (and defeat the sign-in limits); too low makes every client look
-  like the proxy (and share one address limit).
+  like the proxy.
+- **Django must not be reachable except through that proxy** (bind it to a
+  private interface or socket; firewall it). A client that reaches Django
+  directly can send any forwarded header it likes.
 - Serve the SPA with its own security headers, for example
   `Content-Security-Policy: default-src 'self'; frame-ancestors 'none'; base-uri 'none'; object-src 'none'`.
   API responses already carry a stricter policy set by Django.
-- If the admin is enabled, allow its path only from the internal network or a
-  VPN.
+- If the admin is enabled, allow its path only from the internal network or a VPN.
 
 ## Database roles
 
-The append-only audit triggers and the ownership triggers can be disabled by
-the **owner** of the tables. For them to protect against a compromised
-application, use two roles:
+Two roles, neither a superuser:
 
-| Role | Used by | Privileges |
-|---|---|---|
-| `merchantflow_owner` | `manage.py migrate` only | owns the schema and tables |
-| `merchantflow_app` | the running application | `SELECT, INSERT, UPDATE, DELETE` on tables, `USAGE` on sequences; **not** the owner |
+| Role | Used by | Owns | Privileges |
+|---|---|---|---|
+| owner (e.g. `merchantflow_owner`) | `migrate`, `grant_runtime_privileges`, maintenance | the database, schema, tables, functions, triggers | everything, as owner |
+| runtime (e.g. `merchantflow_runtime`) | the running application (`DATABASE_URL`) | **nothing** | read/write ordinary tables; **SELECT and INSERT only** on `audit_auditevent`; no TRUNCATE, TRIGGER, REFERENCES; no writes to `django_migrations`; no CREATE in the schema |
 
-With this split, `apps.audit.maintenance.audit_protection_suspended` fails
-with a permission error for the application, as intended. If one role is used
-for both, the triggers still stop every ordinary code path (ORM, bulk
-operations, raw SQL, `TRUNCATE`), but not someone running SQL as the owner.
+Because the runtime role owns nothing, it cannot disable or drop the audit
+and ownership triggers, and it cannot update, delete or truncate audit rows.
+
+### Provisioning (once, by a database administrator)
+
+Set the passwords in the administrator's session or secret store; never commit them.
+
+```sql
+CREATE ROLE merchantflow_owner LOGIN PASSWORD :'owner_password';
+CREATE ROLE merchantflow_runtime LOGIN PASSWORD :'runtime_password';
+CREATE DATABASE merchantflow OWNER merchantflow_owner;
+-- PostgreSQL 15+: PUBLIC cannot create in schema public; verify on older servers:
+--   \c merchantflow
+--   REVOKE CREATE ON SCHEMA public FROM PUBLIC;
+```
+
+The runtime role must not be granted membership of the owner role.
+
+### Every deployment
+
+```bash
+python manage.py check_workspace_owners                                    # owner URL; before migrating
+python manage.py migrate                                                   # owner URL
+python manage.py grant_runtime_privileges --role merchantflow_runtime      # owner URL
+python manage.py verify_database_roles                                     # runtime URL; must succeed
+python manage.py check --deploy --database default --fail-level WARNING    # runtime URL
+```
+
+Run the first three with `DATABASE_URL` set to the **owner** role, the last
+two with the **runtime** role's `DATABASE_URL` (the one the application uses).
+`verify_database_roles` and the deploy check fail if the runtime role is a
+superuser, may create roles or databases, owns or is a member of the owner of
+any table or function, may create in the schema, has more than SELECT/INSERT
+on the audit table, or if a protective trigger is missing or disabled. Re-run
+`grant_runtime_privileges` after every migration so new tables are covered.
+
+`backend/scripts/verify_runtime_role_boundaries.py`, run with the runtime
+URL, attempts every forbidden action (each rolled back) and reports. CI runs
+all of this with separate LOGIN roles (`database-roles` job), and runs the
+browser tests with the server connected as the runtime role.
+
+### Remaining trust boundary
+
+Database **superusers**, the owner role, and whoever controls the database
+server, its backups or its storage can still bypass every database-level
+control (disable triggers, edit files, restore old data). Protect those
+credentials and that infrastructure separately; the application cannot.
+
+## Sign-in limits and recovery
+
+Failed sign-ins are limited per account + address, per account, and per
+address, but a browser that has signed in to the account before is limited
+only by its own counter (OWASP device cookie). A person locked out by someone
+else's guessing can therefore still sign in from their usual browser. Other
+ways back: wait for the window (15 minutes by default), or an operator runs,
+after checking the person's identity:
+
+```bash
+python manage.py clear_login_limits --email person@example.com --reason "ticket 123, identity checked"
+```
+
+It is audited (`auth.login_limits_cleared`). There is no HTTP unlock.
 
 ## Scheduled jobs
 

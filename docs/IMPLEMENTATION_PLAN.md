@@ -99,12 +99,27 @@ appended to that document.
 - Migrations: `accounts.0003` (sign-in counters), `workspaces.0004` (device
   revocation reason, backfilled `manual`), `audit.0002` (append-only
   triggers), `workspaces.0005` (ownership triggers). All reversible.
-  `workspaces.0005` assumes every existing workspace already has exactly one
-  active owner with an active account; check before migrating (query in the
-  M2.1 report).
+  `workspaces.0005` refuses to run if any existing workspace breaks the
+  ownership rule; check first with `manage.py check_workspace_owners` and see
+  DEPLOYMENT.md, "Repairing workspace ownership".
 - `LOGIN_THROTTLE_RATE` and `DJANGO_BEHIND_TLS_PROXY` are gone; use
   `DJANGO_TRUSTED_PROXY_COUNT` and the `LOGIN_*` settings.
 - Schedule `purge_login_attempts` and `clearsessions` (DEPLOYMENT.md).
+
+### M2.1 corrective pass (independent review of the code package)
+
+| Item | Correction | Tests |
+|---|---|---|
+| C1 (P0) | `workspaces.0005` preflight refuses invalid ownership data; `check_workspace_owners` | `test_owner_migration.py` |
+| C2 (P1) | Required `DJANGO_ENVIRONMENT`; production rules independent of DEBUG | `test_production_settings.py` |
+| C3 (P1) | Owner and runtime database roles; grant, verify, deploy check | `test_database_roles.py`, CI `database-roles` job, browser tests as runtime role |
+| C4 (P1) | Known-browser exemption, single-statement counters, operator recovery | `test_login_protection.py` |
+| C5 (P2) | No user deletion in the admin; deactivation via the service | `test_admin.py` |
+| C6 (P2) | One lock order for membership and device changes | `test_lock_order.py` |
+
+**Upgrade notes for this pass:** add `DJANGO_ENVIRONMENT=development` to every
+local `backend/.env`; production deployments follow the new "Every
+deployment" steps in DEPLOYMENT.md (owner/runtime roles).
 
 ### Planned for M2.2 (from the assessment)
 - **F-08** sessions: add `created_at`/`last_activity_at` to `UserSession`,
