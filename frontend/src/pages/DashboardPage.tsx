@@ -3,6 +3,7 @@ import { errorMessage } from "../api/client";
 import { workspaceApi } from "../api/endpoints";
 import type { Membership } from "../api/types";
 import { EmptyState, ErrorState, LoadingState } from "../components/States";
+import { useWorkspaceMembership } from "../components/WorkspaceRoute";
 
 type Load =
   | { status: "loading" }
@@ -14,7 +15,8 @@ type Load =
  * whole path (session cookie, membership check, tenant scoping) is exercised;
  * business figures arrive with the catalogue and order milestones.
  */
-export function DashboardPage({ workspaceId }: { workspaceId: string }) {
+export function DashboardPage() {
+  const workspaceId = useWorkspaceMembership().workspace.id;
   const [load, setLoad] = useState<Load>({ status: "loading" });
 
   const fetchWorkspace = useCallback(
@@ -58,7 +60,7 @@ export function DashboardPage({ workspaceId }: { workspaceId: string }) {
       <dl className="stat-grid">
         <div className="card stat">
           <dt>Workspace</dt>
-          <dd>{membership.workspace.name}</dd>
+          <dd data-testid="stat-workspace">{membership.workspace.name}</dd>
         </div>
         <div className="card stat">
           <dt>Your role</dt>

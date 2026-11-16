@@ -1,7 +1,8 @@
 # Architecture
 
-This document describes what is implemented today (Milestones 0 and 1) and the
-rules later milestones must follow.
+This document describes what is implemented today (Milestones 0 and 1, plus
+the corrections from the Milestone 1 review) and the rules later milestones
+must follow.
 
 ## Shape of the system
 
@@ -15,38 +16,42 @@ Browser (React SPA) ──same origin──> /api/* ──> Django + DRF ──>
 The SPA and the API are always served from **one origin**: in development
 through the Vite proxy, in production through a reverse proxy that serves the
 built SPA and forwards `/api/` and `/admin/` to Django. This is a deliberate
-constraint, because it is what makes cookie authentication simple and safe
-(see below). No CORS is configured.
+constraint, because it is what makes cookie authentication simple and safe.
+No CORS is configured.
 
 ```
 merchantflow/
 ├── backend/
 │   ├── config/            settings (environment driven), root URLs
 │   ├── apps/
-│   │   ├── common/        base models, error format, health check, session auth class
-│   │   ├── accounts/      User, login, logout, current user
-│   │   ├── workspaces/    Workspace, memberships, policies, tenant isolation
-│   │   ├── devices/       Device registration, revocation, sync gate
+│   │   ├── common/        base models, domain errors, API error format, health check
+│   │   ├── accounts/      User, browser installations, sessions, login, logout
+│   │   ├── workspaces/    Workspace, memberships, workspace devices, policies, the guard
+│   │   ├── devices/       HTTP endpoints for workspace devices and the sync handshake
 │   │   └── audit/         append-only audit events
+│   ├── scripts/           e2e_seed.py (throwaway database for browser tests)
 │   └── tests/             pytest suite (runs on PostgreSQL)
 ├── frontend/
-│   └── src/
-│       ├── api/           the only code that performs HTTP
-│       ├── session/       who is signed in, which workspace
-│       ├── components/    shell and shared states
-│       └── pages/         login, workspace choice, dashboard placeholder
+│   ├── src/
+│   │   ├── api/           the only code that performs HTTP
+│   │   ├── session/       who is signed in and what they may enter
+│   │   ├── components/    shell, workspace route, shared states
+│   │   └── pages/         login, workspace choice, dashboard placeholder
+│   └── e2e/               Playwright browser tests against the real stack
 └── docs/
 ```
 
 ## Domain boundaries
 
+Dependencies point one way only.
+
 | App | Owns | May depend on |
 |---|---|---|
-| `common` | Abstract models, API error format, authentication class | nothing |
-| `accounts` | Identity: who a person is and how they prove it | `common` |
-| `audit` | Record of actions | `common` (references users and workspaces by key) |
-| `workspaces` | Tenants, roles, capabilities, access resolution | `accounts`, `audit`, `common` |
-| `devices` | Devices and the synchronisation gate | `workspaces`, `audit`, `common` |
+| `common` | Abstract models, domain errors, API error format | nothing |
+| `audit` | Record of actions | `common` |
+| `accounts` | Identity: users, browser installations, sessions | `common`, `audit` |
+| `workspaces` | Tenants, roles, capabilities, workspace devices, the access guard | `accounts`, `audit`, `common` |
+| `devices` | HTTP surface for workspace devices and sync (no models) | `workspaces`, `accounts` |
 
 Future domain apps (catalogue, orders, payments, commissions, inventory,
 sync, import/export) depend on `workspaces` for isolation and never on each
@@ -54,66 +59,114 @@ other's internals: they call each other's service functions.
 
 ### Layers inside an app
 
-| Layer | File | Responsibility |
+| Layer | Files | Responsibility |
 |---|---|---|
-| HTTP | `views.py` | Parse the request, call a service, shape the response |
+| HTTP | `views.py`, `access.py`, `authentication.py` | Parse the request, call a service, shape the response |
 | Input | `serializers.py` | Validate and normalise request data |
-| Business | `services.py` | The operation: transaction, locking, rules, audit event |
+| Business | `services.py`, `device_services.py`, `installations.py` | The operation: transaction, locking, rules, audit event |
 | Policy | `workspaces/policies.py` | Which role holds which capability |
+| Read side | `selectors.py`, `context.py` | Shared lookups |
 | Data | `models.py` | Structure and database constraints |
 
-Views contain no business rules. Services re-check the actor's authority, so
-a rule holds for any caller (HTTP today; sync replay and imports later).
+Rules, each enforced by a test in `tests/test_architecture.py`:
+
+- Business, policy, read-side and data modules **do not import the HTTP
+  layer** (`rest_framework`, `django.http`). They raise the `DomainError`
+  family from `common/exceptions.py`. `common/api_errors.py` is the only place
+  that turns those into HTTP responses.
+- Views contain no business rules.
+
+### How services authorise
+
+A service that acts for a member receives the acting membership and treats it
+only as an identifier. Inside its transaction it calls `authorize_actor`,
+which re-reads that membership `FOR UPDATE` and refuses unless the membership
+is active, the workspace is active, the user is active and the role holds the
+capability. The lock is held to commit, so the actor cannot be demoted or
+removed while the operation runs. A membership object loaded before a role
+change therefore confers nothing.
 
 ## Authentication
 
-First-party browser authentication with **server-side sessions**:
+First-party browser authentication with **server-side sessions bound to a
+browser installation**.
 
-- Login verifies the password and creates a session. The browser receives the
-  session identifier in a cookie that is `HttpOnly` (JavaScript cannot read
-  it), `SameSite=Lax`, and `Secure` whenever `DJANGO_SECURE_COOKIES=true`.
+- Login verifies the password, creates a session and binds it to this
+  browser's `DeviceInstallation`. The browser receives the session identifier
+  in a cookie that is `HttpOnly`, `SameSite=Lax`, and `Secure` whenever
+  `DJANGO_SECURE_COOKIES=true`.
 - Nothing is stored in `localStorage` or `sessionStorage`; an ESLint rule
   forbids both.
 - **CSRF:** every state-changing request must carry an `X-CSRFToken` header
   matching the CSRF cookie. DRF enforces this for authenticated requests; the
   login view enforces it explicitly, because an anonymous login request would
-  otherwise be exempt (login CSRF). Django also rejects requests whose
-  `Origin` is not trusted.
-- Logout deletes the server-side session, so the cookie is immediately worthless.
+  otherwise be exempt. Django also rejects requests whose `Origin` is not trusted.
+- Logout deletes the server-side session.
 - Failed logins return one identical 401 for wrong password, unknown email and
-  disabled account, and are rate limited per IP address.
-- Passwords use Django's default PBKDF2 hashing and validators (minimum 10
-  characters, not common, not numeric, not similar to the user's details).
+  disabled account, and are rate limited (weaknesses: review finding H-02).
+- Passwords use Django's default PBKDF2 hashing and validators.
 - Users are identified by email, compared case-insensitively.
 
-Alternative considered: bearer tokens (JWT). Rejected for the browser because
-a token readable by JavaScript is exposed to any script injection and cannot
-be revoked without extra server state. If a native mobile client is ever
-built, it should get its own token mechanism instead of weakening this one.
+### Browser installations and sessions
+
+| Record | Meaning |
+|---|---|
+| `DeviceInstallation` | One browser installation of one user |
+| `UserSession` | A login session; knows its user and its installation |
+| `WorkspaceDevice` | That installation's authorisation in one workspace |
+
+- The server recognises a returning browser by the `mf_device` cookie: an
+  HttpOnly **identifier, not a credential**. It is read only at login, after
+  the password check, and is honoured only if it names an active installation
+  of the same user. Anything else yields a new installation. It never
+  authenticates a request.
+- The API accepts a session only if it is bound to an **active** installation,
+  which becomes `request.auth`. A session with no installation (for example
+  one from the Django admin login) or a revoked one gets 401.
+- One installation serves all of a user's workspaces. Belonging to several
+  workspaces does not create several installations.
+- **Revoking an installation** (by its user) deletes its sessions in the same
+  transaction. That browser is signed out everywhere.
+- **Revoking a workspace device** (by its user, or by an owner or manager of
+  that workspace) closes that one workspace to that browser. The session and
+  the user's other workspaces are unaffected. The row is never recreated, so
+  the browser cannot obtain a replacement.
+- An owner cannot revoke a member's installation, because it also carries the
+  member's access to other workspaces.
+- What this does not cover is stated in DECISIONS D-019.
 
 ## Workspace isolation
 
-Every business record will carry a `workspace` foreign key. Isolation is
-enforced on the server in three steps:
+Every business record carries a `workspace` foreign key (models extend
+`WorkspaceOwnedModel`). Isolation is enforced on the server:
 
 1. **The workspace is named in the URL**: `/api/v1/workspaces/<workspace_id>/…`.
    The identifier is a claim, not a fact.
-2. **`resolve_membership`** (`workspaces/access.py`) looks for an *active*
-   membership linking the authenticated user to that workspace. No membership,
-   or an unknown workspace, gives the same `404`, so identifiers cannot be
-   probed. An inactive workspace gives `403`.
-3. **The view declares a capability** and the role must hold it, otherwise `403`.
+2. **Membership.** The guard looks for an *active* membership linking the
+   authenticated user to that workspace. No membership, or an unknown
+   workspace, gives the same `404`. An inactive workspace gives `403`.
+3. **Device.** The session's installation must hold an unrevoked
+   `WorkspaceDevice` for this workspace (created on first entry), else `403
+   device_not_authorized`.
+4. **Capability.** The view declares a capability and the role must hold it,
+   otherwise `403`.
 
-All workspace-scoped endpoints extend `WorkspaceAPIView`, which performs steps
-2 and 3 before any handler runs and **fails closed**: an endpoint that declares
-no capability raises an error instead of being reachable.
+Handlers then query through `self.workspace_queryset(Model)`. A record
+identifier from another tenant combined with the caller's own workspace
+identifier finds nothing (`404`).
 
-Handlers then query only through `request.workspace`. A record identifier from
-another tenant combined with the caller's own workspace identifier therefore
-finds nothing (`404`). The test suite covers this case explicitly.
+### The guard cannot be skipped by accident
 
-A user's "current workspace" is stored in the session as a convenience for
-restoring the UI. It is never used for authorisation.
+| Mechanism | What it prevents |
+|---|---|
+| `WorkspaceAPIView.get_permissions()` always puts `IsAuthenticated` and `WorkspaceAccess` first; a subclass's `permission_classes` only add checks | A subclass replacing the guard by setting `permission_classes` |
+| `__init_subclass__` raises if a subclass defines `get_permissions`, `check_permissions`, `initial`, `authentication_classes` and related hooks | A subclass overriding the machinery |
+| System check `workspaces.E001` | A route with `workspace_id` served by anything other than a `WorkspaceAPIView` |
+| System check `workspaces.E002` | A handler with no declared capability |
+| `tests/isolation.py` registry plus `test_architecture.py` | A new workspace endpoint that has not been put through the isolation contract |
+| `test_isolation.py` | Each endpoint: anonymous 401, unbound session 401, non-member 404, another tenant's owner 404, suspended member 404, foreign record id 404, revoked device 403, and no data changed |
+
+The system checks run at server start, in `manage.py check` and in CI.
 
 ### Roles and capabilities
 
@@ -135,16 +188,19 @@ never suspended or removed. Workspaces are only created by
 `create_workspace`, which creates the owner membership in the same
 transaction. Ownership changes only through `transfer_ownership`.
 
-## Devices
+## Frontend routing
 
-A device is a browser installation registered by one user for one workspace.
-Synchronisation endpoints require, in addition to the session, an
-`X-Device-Id` header naming an active device that belongs to the same user and
-workspace. A revoked device is refused with `device_revoked`. The device
-identifier is not a credential: the session authenticates, the device attributes.
+| Path | Screen |
+|---|---|
+| `/login` | Login. After signing in, returns to the page that was asked for |
+| `/` | Redirects to the workspace used last, the only workspace, or the chooser |
+| `/workspaces` | Workspace chooser (plain links to `/w/<id>`) |
+| `/w/<workspace-id>/…` | Everything inside a workspace |
 
-Only the gate and a handshake endpoint exist. The operation queue, IndexedDB
-storage and the service worker belong to the offline milestone.
+The URL is the single source of truth for which workspace a tab shows. The
+shell is keyed by workspace id, so moving between workspaces discards all
+state loaded for the previous one. Tabs do not affect each other. The server
+only remembers the workspace used last, to choose where `/` leads.
 
 ## Database design principles
 
@@ -154,15 +210,20 @@ storage and the service worker belong to the offline milestone.
 - Financial and operational history is never deleted: foreign keys use
   `PROTECT`, records are archived through status fields.
 - Operations that reason about existing rows lock them (`select_for_update`)
-  inside a transaction.
+  inside a transaction, starting with the acting membership.
+- Every write goes through a transactional service function
+  (`ATOMIC_REQUESTS` is off on purpose).
 - Money will be `Decimal` / `NUMERIC`; no floating point.
 - Timestamps are stored in UTC.
-- Every security-relevant change writes an `AuditEvent` in the same transaction.
+- Membership, device, installation and workspace changes made through the
+  services write an `AuditEvent` in the same transaction. Logins and changes
+  made in the Django admin are not yet audited (review finding D-03).
 
 ## API conventions
 
 - Versioned under `/api/v1/`. OpenAPI schema at `/api/schema/`, Swagger UI at
   `/api/docs/` (enabled by `API_DOCS_ENABLED`, on by default only in debug).
 - Errors always have the shape `{"code", "detail", "errors"?}`.
-- `401` not signed in, `403` signed in but not allowed, `404` not found or not
-  yours, `409` valid request but wrong state, `429` rate limited.
+- `401` not signed in or session not bound to an active device, `403` signed
+  in but not allowed, `404` not found or not yours, `409` valid request but
+  wrong state, `429` rate limited.

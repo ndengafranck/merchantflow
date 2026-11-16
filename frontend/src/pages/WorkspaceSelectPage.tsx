@@ -1,31 +1,26 @@
 import { useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { Link } from "react-router-dom";
 import { errorMessage } from "../api/client";
 import type { Membership, User } from "../api/types";
 import { EmptyState, FullPage } from "../components/States";
-import { useSession } from "../session/SessionContext";
+import { useSession, workspacePath } from "../session/SessionContext";
 
 interface Props {
   user: User;
   memberships: Membership[];
-  currentWorkspaceId: string | null;
+  lastWorkspaceId: string | null;
 }
 
-export function WorkspaceSelectPage({ user, memberships, currentWorkspaceId }: Props) {
-  const { selectWorkspace, logout } = useSession();
-  const navigate = useNavigate();
-  const [pendingId, setPendingId] = useState<string | null>(null);
+export function WorkspaceSelectPage({ user, memberships, lastWorkspaceId }: Props) {
+  const { logout } = useSession();
   const [error, setError] = useState<string | null>(null);
 
-  async function choose(workspaceId: string) {
-    setPendingId(workspaceId);
+  async function handleLogout() {
     setError(null);
     try {
-      await selectWorkspace(workspaceId);
-      navigate("/", { replace: true });
+      await logout();
     } catch (caught) {
-      setError(errorMessage(caught));
-      setPendingId(null);
+      setError(`Could not sign out: ${errorMessage(caught)}`);
     }
   }
 
@@ -52,24 +47,21 @@ export function WorkspaceSelectPage({ user, memberships, currentWorkspaceId }: P
           <ul className="workspace-list">
             {memberships.map((membership) => (
               <li key={membership.id}>
-                <button
-                  type="button"
+                {/* A real link: it can be opened in a new tab and lands in history. */}
+                <Link
                   className="workspace-option"
-                  onClick={() => choose(membership.workspace.id)}
-                  disabled={pendingId !== null}
-                  aria-current={membership.workspace.id === currentWorkspaceId || undefined}
+                  to={workspacePath(membership.workspace.id)}
+                  aria-current={membership.workspace.id === lastWorkspaceId || undefined}
                 >
                   <span className="workspace-option-name">{membership.workspace.name}</span>
-                  <span className="badge">
-                    {pendingId === membership.workspace.id ? "Opening…" : membership.role}
-                  </span>
-                </button>
+                  <span className="badge">{membership.role}</span>
+                </Link>
               </li>
             ))}
           </ul>
         )}
 
-        <button type="button" className="button button-secondary" onClick={() => void logout()}>
+        <button type="button" className="button button-secondary" onClick={handleLogout}>
           Sign out
         </button>
       </section>

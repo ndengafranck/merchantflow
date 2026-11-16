@@ -5,7 +5,7 @@ from drf_spectacular.extensions import OpenApiAuthenticationExtension
 
 
 class SessionScheme(OpenApiAuthenticationExtension):
-    target_class = "apps.common.authentication.SessionAuthentication"
+    target_class = "apps.accounts.authentication.SessionAuthentication"
     name = "sessionCookie"
 
     def get_security_definition(self, auto_schema) -> dict:

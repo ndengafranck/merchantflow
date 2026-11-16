@@ -1,6 +1,6 @@
 from django.contrib import admin
 
-from .models import Workspace, WorkspaceMembership
+from .models import Workspace, WorkspaceDevice, WorkspaceMembership
 
 
 class NoDeleteAdmin(admin.ModelAdmin):
@@ -28,3 +28,18 @@ class WorkspaceMembershipAdmin(NoDeleteAdmin):
     list_filter = ["role", "status"]
     search_fields = ["user__email", "workspace__name"]
     autocomplete_fields = ["user", "workspace"]
+
+
+@admin.register(WorkspaceDevice)
+class WorkspaceDeviceAdmin(NoDeleteAdmin):
+    """Read-only: revoke through the API so the change is audited."""
+
+    list_display = ["installation", "workspace", "status", "last_seen_at"]
+    list_filter = ["status"]
+    search_fields = ["installation__user__email", "workspace__name"]
+
+    def has_add_permission(self, request) -> bool:
+        return False
+
+    def has_change_permission(self, request, obj=None) -> bool:
+        return False

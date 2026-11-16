@@ -1,5 +1,6 @@
 from django.contrib.auth.base_user import AbstractBaseUser, BaseUserManager
 from django.contrib.auth.models import PermissionsMixin
+from django.contrib.sessions.base_session import AbstractBaseSession
 from django.db import models
 from django.db.models.functions import Lower
 from django.utils import timezone
@@ -71,3 +72,89 @@ class User(UUIDModel, AbstractBaseUser, PermissionsMixin):
     def clean(self) -> None:
         super().clean()
         self.email = normalize_email(self.email)
+
+
+class InstallationStatus(models.TextChoices):
+    ACTIVE = "active", "Active"
+    REVOKED = "revoked", "Revoked"
+
+
+class DeviceInstallation(UUIDModel):
+    """One browser installation used by one user.
+
+    The server recognises an installation by the identifier cookie it set at
+    an earlier login. The identifier is not a credential: it is consulted only
+    after the password has been verified, and it never authenticates a request.
+    Every session is bound to exactly one installation, so revoking the
+    installation ends its sessions.
+
+    An installation is global to the user. What it may do in a particular
+    workspace is recorded by ``workspaces.WorkspaceDevice``.
+    """
+
+    user = models.ForeignKey(
+        "accounts.User", on_delete=models.PROTECT, related_name="installations"
+    )
+    label = models.CharField(max_length=80)
+    user_agent = models.CharField(max_length=255, blank=True)
+    status = models.CharField(
+        max_length=16, choices=InstallationStatus.choices, default=InstallationStatus.ACTIVE
+    )
+    created_at = models.DateTimeField(default=timezone.now)
+    last_login_at = models.DateTimeField(null=True, blank=True)
+    revoked_at = models.DateTimeField(null=True, blank=True)
+    revoked_by = models.ForeignKey(
+        "accounts.User",
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="revoked_installations",
+    )
+
+    class Meta:
+        ordering = ["-created_at"]
+        constraints = [
+            models.CheckConstraint(
+                condition=(
+                    models.Q(status="active", revoked_at__isnull=True, revoked_by__isnull=True)
+                    | models.Q(status="revoked", revoked_at__isnull=False, revoked_by__isnull=False)
+                ),
+                name="installation_revocation_consistent",
+            ),
+        ]
+        indexes = [models.Index(fields=["user", "status"], name="installation_user_status_idx")]
+
+    def __str__(self) -> str:
+        return f"{self.label} ({self.status})"
+
+    @property
+    def is_active(self) -> bool:
+        return self.status == InstallationStatus.ACTIVE
+
+
+class UserSession(AbstractBaseSession):
+    """Server-side session that records whose it is and which device holds it.
+
+    Django's stock session row is opaque. These two columns are what make
+    "revoke this device" and "end this user's sessions" possible.
+    """
+
+    user = models.ForeignKey(
+        "accounts.User", null=True, blank=True, on_delete=models.CASCADE, related_name="sessions"
+    )
+    installation = models.ForeignKey(
+        DeviceInstallation,
+        null=True,
+        blank=True,
+        on_delete=models.CASCADE,
+        related_name="sessions",
+    )
+
+    class Meta(AbstractBaseSession.Meta):
+        db_table = "accounts_usersession"
+
+    @classmethod
+    def get_session_store_class(cls):
+        from .session_store import SessionStore
+
+        return SessionStore

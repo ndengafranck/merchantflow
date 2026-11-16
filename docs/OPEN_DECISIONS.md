@@ -31,12 +31,33 @@ operator-only, through management commands (D-010).
 owners? Sliding expiry? Forced re-login before payouts?
 
 ### O-006 Should revoking a device also sign that browser out?
-**Current default:** no (D-009). Doing it needs sessions to be tied to
-devices, which belongs with the sync design.
+**Resolved (D-017).** Revoking an installation ends its sessions. Revoking a
+workspace device closes that workspace and leaves the session, because the
+same browser may legitimately work in other workspaces.
 
 ### O-007 Password reset
 Not implemented. Needs an email (or SMS) provider. Until then an operator
 resets passwords with `manage.py changepassword`.
+
+### O-020 Should new devices need the owner's approval?
+**Why it matters:** without approval, anyone who knows a member's password
+can use a new or cookie-cleared browser straight away, so revoking a device
+does not keep out a person who still has the password (D-019).
+**Current default:** no approval; first entry authorises (D-018), as
+instructed. **To decide:** approval for all roles, for affiliates only, or
+never; and who approves when the owner is unavailable.
+
+### O-021 Should an owner be able to end a member's sessions?
+An owner can revoke a member's workspace device but not their installation
+(D-020). **To decide:** whether that is enough, or whether suspending a
+membership should also revoke that member's devices in the workspace.
+**Current default:** suspension blocks access immediately; device rows are
+left as they are.
+
+### O-022 Limit on installations per user
+Each login from an unrecognised browser creates an installation row.
+**Current default:** unlimited. **To decide:** a cap, and cleanup of
+installations not used for a long time.
 
 ## Relevant to later milestones (recorded so they are not forgotten)
 

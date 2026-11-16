@@ -33,6 +33,27 @@ class Workspace(UUIDModel, TimestampedModel):
         return self.name
 
 
+class WorkspaceScopedQuerySet(models.QuerySet):
+    def for_workspace(self, workspace: Workspace) -> "WorkspaceScopedQuerySet":
+        """The only sanctioned way for request code to start a tenant query."""
+        return self.filter(workspace=workspace)
+
+
+class WorkspaceOwnedModel(models.Model):
+    """Base for every record that belongs to exactly one workspace.
+
+    Gives the model its ``workspace`` key and the ``for_workspace`` queryset
+    entry point that ``WorkspaceAPIView.workspace_queryset`` relies on.
+    """
+
+    workspace = models.ForeignKey(Workspace, on_delete=models.PROTECT, related_name="%(class)ss")
+
+    objects = WorkspaceScopedQuerySet.as_manager()
+
+    class Meta:
+        abstract = True
+
+
 class MembershipRole(models.TextChoices):
     OWNER = "owner", "Owner"
     MANAGER = "manager", "Manager"
@@ -62,6 +83,8 @@ class WorkspaceMembership(UUIDModel, TimestampedModel):
     status = models.CharField(
         max_length=16, choices=MembershipStatus.choices, default=MembershipStatus.ACTIVE
     )
+
+    objects = WorkspaceScopedQuerySet.as_manager()
 
     class Meta:
         ordering = ["created_at"]
@@ -98,3 +121,56 @@ class WorkspaceMembership(UUIDModel, TimestampedModel):
     @property
     def is_owner(self) -> bool:
         return self.role == MembershipRole.OWNER
+
+
+class WorkspaceDeviceStatus(models.TextChoices):
+    ACTIVE = "active", "Active"
+    REVOKED = "revoked", "Revoked"
+
+
+class WorkspaceDevice(UUIDModel, TimestampedModel, WorkspaceOwnedModel):
+    """Authorisation of one browser installation to work in one workspace.
+
+    Created automatically the first time an installation enters a workspace
+    through an active membership. There is at most one row per installation
+    per workspace and a revoked row is never replaced, so revoking it closes
+    this workspace to that browser while the user's other workspaces, and
+    their other browsers, are unaffected.
+    """
+
+    installation = models.ForeignKey(
+        "accounts.DeviceInstallation", on_delete=models.PROTECT, related_name="workspace_devices"
+    )
+    status = models.CharField(
+        max_length=16,
+        choices=WorkspaceDeviceStatus.choices,
+        default=WorkspaceDeviceStatus.ACTIVE,
+    )
+    last_seen_at = models.DateTimeField(null=True, blank=True)
+    revoked_at = models.DateTimeField(null=True, blank=True)
+    revoked_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="revoked_workspace_devices",
+    )
+
+    class Meta:
+        ordering = ["-created_at"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["workspace", "installation"],
+                name="workspace_device_one_per_installation",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    Q(status="active", revoked_at__isnull=True, revoked_by__isnull=True)
+                    | Q(status="revoked", revoked_at__isnull=False, revoked_by__isnull=False)
+                ),
+                name="workspace_device_revocation_consistent",
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.installation_id} @ {self.workspace_id} ({self.status})"

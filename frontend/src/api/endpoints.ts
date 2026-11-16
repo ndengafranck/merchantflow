@@ -14,7 +14,8 @@ export const authApi = {
 
 export const workspaceApi = {
   mine: () => api<MyWorkspaces>("/workspaces/"),
-  select: (workspaceId: string) =>
+  /** Tell the server which workspace this session used last (a redirect hint only). */
+  remember: (workspaceId: string) =>
     api<Membership>("/workspaces/current/", { method: "PUT", body: { workspace_id: workspaceId } }),
   detail: (workspaceId: string) => api<Membership>(`/workspaces/${workspaceId}/`),
 };

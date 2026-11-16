@@ -227,6 +227,15 @@ p {
   border-radius: 8px;
   cursor: pointer;
   text-align: left;
+  text-decoration: none;
+}
+
+.button-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  text-decoration: none;
+  margin-bottom: 0.5rem;
 }
 
 .workspace-option:hover:not(:disabled),

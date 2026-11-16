@@ -1,34 +1,38 @@
-"""The workspace a browser session is currently working in.
+"""The workspace a browser session used last.
 
-This is a convenience so the SPA can restore its place after a reload. It is
-not an authorisation mechanism: every workspace-scoped request is checked
-again by ``access.resolve_membership``.
+A convenience so the SPA can send someone back to where they were after
+signing in. It is not an authorisation mechanism and it does not decide which
+workspace a screen shows: the SPA takes that from its URL, and every
+workspace-scoped request is checked by ``access.WorkspaceAccess``.
 """
 
 from uuid import UUID
 
-from rest_framework.exceptions import APIException
-
-from .access import resolve_membership
 from .models import WorkspaceMembership
+from .selectors import find_active_membership, membership_grants_entry
 
 SESSION_KEY = "current_workspace_id"
 
 
-def select_workspace(request, workspace_id: UUID) -> WorkspaceMembership:
-    membership = resolve_membership(request.user, workspace_id)
+def remember_workspace(request, workspace_id: UUID) -> WorkspaceMembership | None:
+    """Record the workspace if the user may enter it; ``None`` otherwise."""
+    membership = find_active_membership(request.user, workspace_id)
+    if not membership_grants_entry(membership):
+        return None
     request.session[SESSION_KEY] = str(workspace_id)
     return membership
 
 
-def current_workspace_id(request) -> str | None:
-    """Return the selected workspace if the user may still enter it."""
+def last_workspace_id(request) -> str | None:
+    """The remembered workspace, if the user may still enter it."""
     stored = request.session.get(SESSION_KEY)
     if stored is None:
         return None
     try:
-        resolve_membership(request.user, UUID(stored))
-    except (APIException, ValueError):
+        allowed = membership_grants_entry(find_active_membership(request.user, UUID(stored)))
+    except ValueError:
+        allowed = False
+    if not allowed:
         del request.session[SESSION_KEY]
         return None
     return stored

@@ -1,5 +1,6 @@
 from django.db import transaction
 from drf_spectacular.utils import extend_schema
+from rest_framework.exceptions import NotFound
 from rest_framework.generics import get_object_or_404
 from rest_framework.request import Request
 from rest_framework.response import Response
@@ -33,20 +34,22 @@ class MyWorkspacesView(APIView):
             .order_by("workspace__name")
         )
         payload = {
-            "current_workspace_id": context.current_workspace_id(request),
+            "current_workspace_id": context.last_workspace_id(request),
             "memberships": memberships,
         }
         return Response(MyWorkspacesSerializer(payload).data)
 
 
 class CurrentWorkspaceView(APIView):
-    """Select the workspace this browser session works in."""
+    """Remember the workspace this browser session used last (a UI hint)."""
 
     @extend_schema(request=SelectWorkspaceSerializer, responses=MyMembershipSerializer)
     def put(self, request: Request) -> Response:
         serializer = SelectWorkspaceSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        membership = context.select_workspace(request, serializer.validated_data["workspace_id"])
+        membership = context.remember_workspace(request, serializer.validated_data["workspace_id"])
+        if membership is None:
+            raise NotFound("Workspace not found.")
         return Response(MyMembershipSerializer(membership).data)
 
 
@@ -63,9 +66,7 @@ class MemberListView(WorkspaceAPIView):
 
     @extend_schema(responses=MemberSerializer(many=True))
     def get(self, request: Request, workspace_id) -> Response:
-        members = WorkspaceMembership.objects.select_related("user").filter(
-            workspace=request.workspace
-        )
+        members = self.workspace_queryset(WorkspaceMembership).select_related("user")
         return Response(MemberSerializer(members, many=True).data)
 
 
@@ -75,7 +76,8 @@ class MemberDetailView(WorkspaceAPIView):
     @extend_schema(request=MemberUpdateSerializer, responses=MemberSerializer)
     def patch(self, request: Request, workspace_id, membership_id) -> Response:
         # Scoped lookup: a membership of another workspace is simply not found.
-        get_object_or_404(WorkspaceMembership, pk=membership_id, workspace=request.workspace)
+        members = self.workspace_queryset(WorkspaceMembership)
+        get_object_or_404(members, pk=membership_id)
         serializer = MemberUpdateSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         changes = serializer.validated_data
@@ -88,5 +90,5 @@ class MemberDetailView(WorkspaceAPIView):
                 services.set_member_status(
                     actor=request.membership, membership_id=membership_id, status=changes["status"]
                 )
-        member = WorkspaceMembership.objects.select_related("user").get(pk=membership_id)
+        member = members.select_related("user").get(pk=membership_id)
         return Response(MemberSerializer(member).data)

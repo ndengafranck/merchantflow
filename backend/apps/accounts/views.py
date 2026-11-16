@@ -11,8 +11,9 @@ from rest_framework.response import Response
 from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.views import APIView
 
-from .models import normalize_email
-from .serializers import LoginSerializer, UserSerializer
+from . import installations
+from .models import DeviceInstallation, normalize_email
+from .serializers import InstallationSerializer, LoginSerializer, UserSerializer
 
 
 @method_decorator([never_cache, ensure_csrf_cookie], name="dispatch")
@@ -55,7 +56,10 @@ class LoginView(APIView):
             # account, so the endpoint cannot be used to discover accounts.
             raise AuthenticationFailed("Incorrect email or password.", code="invalid_credentials")
         login(request, user)  # rotates the session key and the CSRF token
-        return Response(UserSerializer(user).data)
+        installation = installations.bind_session_to_installation(request, user)
+        response = Response(UserSerializer(user).data)
+        installations.set_installation_cookie(response, installation)
+        return response
 
 
 class LogoutView(APIView):
@@ -69,3 +73,27 @@ class MeView(APIView):
     @extend_schema(responses=UserSerializer)
     def get(self, request: Request) -> Response:
         return Response(UserSerializer(request.user).data)
+
+
+class InstallationListView(APIView):
+    """The signed-in user's own browser installations."""
+
+    @extend_schema(responses=InstallationSerializer(many=True))
+    def get(self, request: Request) -> Response:
+        queryset = DeviceInstallation.objects.filter(user=request.user)
+        serializer = InstallationSerializer(queryset, many=True, context={"request": request})
+        return Response(serializer.data)
+
+
+class InstallationRevokeView(APIView):
+    """Revoke one of your own installations; its sessions end immediately."""
+
+    @extend_schema(request=None, responses=InstallationSerializer)
+    def post(self, request: Request, installation_id) -> Response:
+        installation = installations.revoke_installation(
+            user=request.user, installation_id=installation_id
+        )
+        data = InstallationSerializer(installation, context={"request": request}).data
+        if installation.pk == request.auth.pk:
+            logout(request)  # the caller revoked the browser they are using
+        return Response(data)

@@ -1,29 +1,29 @@
 from rest_framework import serializers
 
-from .models import Device
+from apps.workspaces.models import WorkspaceDevice
 
 
-class DeviceSerializer(serializers.ModelSerializer):
-    user_id = serializers.UUIDField(read_only=True)
+class WorkspaceDeviceSerializer(serializers.ModelSerializer):
+    user_id = serializers.UUIDField(source="installation.user_id", read_only=True)
+    label = serializers.CharField(source="installation.label", read_only=True)
+    is_current = serializers.SerializerMethodField()
 
     class Meta:
-        model = Device
+        model = WorkspaceDevice
         fields = [
             "id",
             "user_id",
-            "name",
-            "platform",
+            "label",
             "status",
+            "is_current",
             "last_seen_at",
             "revoked_at",
             "created_at",
         ]
         read_only_fields = fields
 
-
-class DeviceRegistrationSerializer(serializers.Serializer):
-    name = serializers.CharField(max_length=80)
-    platform = serializers.CharField(max_length=120, required=False, allow_blank=True, default="")
+    def get_is_current(self, device: WorkspaceDevice) -> bool:
+        return device.pk == self.context["request"].workspace_device.pk
 
 
 class SyncHandshakeSerializer(serializers.Serializer):

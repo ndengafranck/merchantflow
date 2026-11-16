@@ -7,7 +7,7 @@ docs/OPEN_DECISIONS.md) is made here and nowhere else.
 
 from enum import StrEnum
 
-from rest_framework.exceptions import PermissionDenied
+from apps.common.exceptions import NotPermittedError
 
 from .models import MembershipRole, WorkspaceMembership
 
@@ -40,4 +40,4 @@ def has_capability(membership: WorkspaceMembership, capability: Capability) -> b
 
 def require_capability(membership: WorkspaceMembership, capability: Capability) -> None:
     if not has_capability(membership, capability):
-        raise PermissionDenied("Your role in this workspace does not allow this action.")
+        raise NotPermittedError("Your role in this workspace does not allow this action.")

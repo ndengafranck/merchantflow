@@ -1,4 +1,4 @@
-.PHONY: db-up db-down install migrate backend frontend test lint format
+.PHONY: db-up db-down install migrate backend frontend test e2e lint format
 
 PY := backend/.venv/bin/python
 
@@ -25,6 +25,9 @@ frontend:
 test:
 	cd backend && .venv/bin/pytest
 	cd frontend && npm test
+
+e2e:
+	cd frontend && npm run e2e
 
 lint:
 	cd backend && .venv/bin/ruff check . && .venv/bin/ruff format --check .

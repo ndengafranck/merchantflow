@@ -6,6 +6,7 @@ import pytest
 from django.core.exceptions import ImproperlyConfigured
 from rest_framework.test import APIRequestFactory, force_authenticate
 
+from apps.accounts.models import DeviceInstallation
 from apps.workspaces.access import WorkspaceAPIView
 from apps.workspaces.models import (
     MembershipRole,
@@ -88,7 +89,7 @@ def test_cannot_write_to_another_workspace(shop, other_shop, client_for):
         url(other_shop.workspace, f"members/{other_shop.affiliate.id}/"), {"status": "removed"}
     )
     assert response.status_code == 404
-    assert client.post(url(other_shop.workspace, "devices/"), {"name": "x"}).status_code == 404
+    assert client.post(url(other_shop.workspace, "sync/handshake/")).status_code == 404
 
 
 def test_my_workspaces_lists_only_my_active_memberships(shop, other_shop, make_user, client_for):
@@ -168,7 +169,8 @@ def test_workspace_view_without_declared_capability_fails_closed(shop):
             raise AssertionError("handler reached without a policy")
 
     request = APIRequestFactory().get("/")
-    force_authenticate(request, user=shop.owner.user)
+    installation = DeviceInstallation.objects.create(user=shop.owner.user, label="Test browser")
+    force_authenticate(request, user=shop.owner.user, token=installation)
     with pytest.raises(ImproperlyConfigured):
         Forgotten.as_view()(request, workspace_id=shop.workspace.id)
 
@@ -185,7 +187,7 @@ def test_inactive_membership_is_rejected_everywhere(shop, client_for, status):
 
     for suffix in ["", "members/", "devices/"]:
         assert client.get(url(shop.workspace, suffix)).status_code == 404
-    assert client.post(url(shop.workspace, "devices/"), {"name": "Phone"}).status_code == 404
+    assert client.post(url(shop.workspace, "sync/handshake/")).status_code == 404
     assert client.get("/api/v1/workspaces/").json()["memberships"] == []
     response = client.put("/api/v1/workspaces/current/", {"workspace_id": str(shop.workspace.id)})
     assert response.status_code == 404

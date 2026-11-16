@@ -6,8 +6,8 @@ brought each customer, what was ordered, whether the sale was completed and
 paid, and what commission is owed. Initial market: Cameroon (XAF).
 
 **Status:** Milestone 0 (foundation) and Milestone 1 (identity and
-workspaces) are implemented. There are no product, order or commission
-features yet. See [docs/IMPLEMENTATION_PLAN.md](docs/IMPLEMENTATION_PLAN.md).
+workspaces) are implemented, together with the corrections from the
+Milestone 1 review. There are no product, order or commission features yet. See [docs/IMPLEMENTATION_PLAN.md](docs/IMPLEMENTATION_PLAN.md).
 
 | Document | Contents |
 |---|---|
@@ -15,6 +15,7 @@ features yet. See [docs/IMPLEMENTATION_PLAN.md](docs/IMPLEMENTATION_PLAN.md).
 | [docs/DECISIONS.md](docs/DECISIONS.md) | Technical decisions and why |
 | [docs/OPEN_DECISIONS.md](docs/OPEN_DECISIONS.md) | Unresolved business rules |
 | [docs/IMPLEMENTATION_PLAN.md](docs/IMPLEMENTATION_PLAN.md) | Milestones and acceptance criteria |
+| [docs/MILESTONE_1_REVIEW.md](docs/MILESTONE_1_REVIEW.md) | Architecture review and the status of each finding |
 
 ## Prerequisites
 
@@ -55,6 +56,9 @@ The frontend needs no environment file and holds no secrets.
 ```bash
 docker compose up -d db
 ```
+
+If port 5432 is already in use, choose another: `POSTGRES_PORT=5433 docker compose up -d db`
+and use the same port in `DATABASE_URL`.
 
 **Option B: an existing PostgreSQL**
 
@@ -99,7 +103,8 @@ cd backend && .venv/bin/python manage.py runserver 127.0.0.1:8000
 cd frontend && npm run dev
 ```
 
-Open http://localhost:5173. The dev server proxies `/api` to the backend, so
+Open http://localhost:5173. Workspace screens live under `/w/<workspace-id>/`,
+so each browser tab keeps its own workspace. The dev server proxies `/api` to the backend, so
 the browser sees a single origin. Always use the application through port
 5173 in development.
 
@@ -108,6 +113,15 @@ the browser sees a single origin. Always use the application through port
 ```bash
 cd backend && .venv/bin/pytest          # needs PostgreSQL running
 cd frontend && npm test
+```
+
+Browser tests (Playwright) run the real stack on ports 8100 and 5183 against a
+separate database, `merchantflow_e2e`, which they create, wipe and fill with
+fictional accounts on every run:
+
+```bash
+cd frontend && npx playwright install chromium   # once
+cd frontend && npm run e2e
 ```
 
 Lint, format and type checks (`make lint` runs all of them):

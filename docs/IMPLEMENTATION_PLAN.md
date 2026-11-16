@@ -8,15 +8,15 @@ Each milestone ends with a review before the next begins.
 |---|---|
 | Repository structure, Git, `.gitignore`, `.editorconfig` | Done |
 | Django backend, React + TypeScript + Vite frontend | Done |
-| PostgreSQL via Docker Compose, with a non-Docker option | Done (Compose file not run in the build environment, see limitations) |
+| PostgreSQL via Docker Compose, with a non-Docker option | Done and verified: migrations, backend tests and browser tests pass against the Compose database |
 | Environment configuration and `.env.example` | Done |
 | Lint and format: ruff; ESLint and Prettier | Done |
 | Tests: pytest on PostgreSQL; Vitest | Done |
-| CI workflow (GitHub Actions) | Written, not yet run (no remote repository) |
+| CI workflow (GitHub Actions) | Written; every step rehearsed locally in a clean clone; not yet run on a remote (no repository available) |
 | Health check `/api/health/` | Done |
 | README and architecture documents | Done |
 
-## Milestone 1: Identity and workspace foundation — done, awaiting review
+## Milestone 1: Identity and workspace foundation — done, reviewed
 
 | Deliverable | State |
 |---|---|
@@ -38,22 +38,47 @@ Each milestone ends with a review before the next begins.
 | 4 | No access by changing a URL identifier | `…::test_owner_of_one_workspace_cannot_read_another_by_changing_the_url`, `…::test_cannot_modify_another_workspaces_member_through_own_workspace_url` |
 | 5 | Roles are enforced | `…::test_role_matrix`, `test_memberships.py::test_services_recheck_the_actors_authority` |
 | 6 | Inactive memberships are rejected | `…::test_inactive_membership_is_rejected_everywhere` |
-| 7 | A revoked device cannot synchronise | `test_devices.py::test_revoked_device_cannot_synchronise` |
+| 7 | A revoked device cannot synchronise | `test_devices.py::test_revoked_device_cannot_synchronise`, `test_installations.py::test_session_that_outlives_its_revoked_installation_is_useless` |
 | 8 | Authentication and CSRF protections | `tests/test_csrf.py` |
+
+## Milestone 1 corrections (review R1 to R5) — done, awaiting independent review
+
+| # | Correction | State | Evidence |
+|---|---|---|---|
+| R1 | Workspace guard is structural; route coverage and isolation contract | Done | `tests/test_architecture.py`, `tests/test_isolation.py` |
+| R2 | Services re-read and lock the actor; domain errors separated from HTTP | Done | `tests/test_actor_authorization.py` |
+| R3 | SPA routes under `/w/<workspace-id>/` | Done | `frontend/src/App.test.tsx`, `frontend/e2e/workspaces.spec.ts` |
+| R4 | Compose verified; browser tests committed; remote CI run | Compose and browser tests done. **Remote CI not run: no repository or credentials available** | `frontend/e2e/`, see the review document |
+| R5 | Sessions bound to browser installations; workspace device authorisation | Done | `tests/test_installations.py`, `tests/test_devices.py`, `tests/test_concurrency.py`, `tests/test_migrations.py` |
+
+**Do not start Milestone 2 until** these corrections have been independently
+reviewed and the CI workflow has passed once on a remote.
+
+### Upgrade notes for an existing database
+
+- `migrate` creates `accounts_deviceinstallation`, `accounts_usersession` and
+  `workspaces_workspacedevice`, copies every legacy `devices_device` row into
+  an installation plus a workspace device (same primary key), and drops
+  `devices_device`. The migration is reversible.
+- The session engine changes, so **everyone is signed out once**. The old
+  `django_session` table is left in place, unused and safe to empty.
+- `POST /workspaces/<id>/devices/` (explicit registration) and the
+  `X-Device-Id` header no longer exist.
 
 ### Known limitations
 
 - No sign-up, invitation, password-reset or member-creation API (D-010, O-003, O-007).
 - Ownership transfer exists as a tested service with no endpoint; it should
   require password confirmation when exposed.
-- Revoking a device does not end that browser's session (D-009, O-006).
-- No concurrency stress tests yet. The invariants rest on database
-  constraints, which are tested; contention tests start with the first
-  financial operations.
-- Login rate limiting is per server process (D-016).
+- Revocation does not keep out someone who knows the password (D-019, O-020).
+- No device management screens; devices are managed through the API.
+- Login rate limiting is weak (review H-02) and per server process (D-016).
+- The Django admin shares the application origin (review S-01).
 - No service worker, IndexedDB or sync queue (D-014).
 - No production deployment configuration (web server, TLS, static files).
 - UI is English only (O-019).
+- The remaining review findings are listed with their status in
+  `docs/MILESTONE_1_REVIEW.md`.
 
 ## Milestone 2: Catalogue and people (proposed)
 

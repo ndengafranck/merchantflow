@@ -4,12 +4,15 @@ import type { Membership, User } from "../api/types";
 export type SessionState =
   | { status: "loading" }
   | { status: "error"; message: string }
-  | { status: "anonymous" }
+  // signedOut is true only after the user chose to sign out, so the next
+  // person to sign in on this browser is not sent to the previous person's page.
+  | { status: "anonymous"; signedOut: boolean }
   | {
       status: "authenticated";
       user: User;
       memberships: Membership[];
-      currentWorkspaceId: string | null;
+      /** Where this session last worked. Used only to pick a landing page. */
+      lastWorkspaceId: string | null;
     };
 
 export interface SessionActions {
@@ -17,7 +20,8 @@ export interface SessionActions {
   reload: () => Promise<void>;
   login: (email: string, password: string) => Promise<void>;
   logout: () => Promise<void>;
-  selectWorkspace: (workspaceId: string) => Promise<void>;
+  /** Record the workspace being viewed. Never changes what any tab shows. */
+  rememberWorkspace: (workspaceId: string) => void;
 }
 
 export interface SessionContextValue extends SessionActions {
@@ -32,8 +36,15 @@ export function useSession(): SessionContextValue {
   return value;
 }
 
-/** The membership for the selected workspace, if the user is in one. */
-export function currentMembership(state: SessionState): Membership | null {
-  if (state.status !== "authenticated" || !state.currentWorkspaceId) return null;
-  return state.memberships.find((m) => m.workspace.id === state.currentWorkspaceId) ?? null;
+export function findMembership(
+  memberships: Membership[],
+  workspaceId: string | null | undefined,
+): Membership | null {
+  if (!workspaceId) return null;
+  return memberships.find((m) => m.workspace.id === workspaceId) ?? null;
+}
+
+/** Path of a screen inside a workspace. The workspace always comes from the URL. */
+export function workspacePath(workspaceId: string, rest = ""): string {
+  return `/w/${workspaceId}${rest}`;
 }

@@ -26,7 +26,9 @@ constraint; removing it later would be much harder.
 ## D-005 Workspace in the URL, verified on every request
 Rather than an implicit "current workspace" in the session. Explicit, works
 across tabs, and suits offline replay where each operation names its
-workspace. The session-stored selection is UI convenience only.
+workspace. This holds for the API (`/api/v1/workspaces/<id>/…`) and, since
+D-021, for the SPA (`/w/<id>/…`). The session stores only the workspace used
+last, as a landing-page hint.
 
 ## D-006 Non-members get 404, not 403
 A 403 would confirm that a workspace identifier exists.
@@ -41,11 +43,9 @@ UUIDv7. **Cost:** random keys fragment indexes on very large tables; revisit
 with time-ordered UUIDs if a table grows large enough to matter.
 
 ## D-009 Devices are identifiers, not credentials
-Sync requests need session + `X-Device-Id`. No device secret is issued,
-because a long-lived secret in IndexedDB would be exactly the kind of stored
-credential the security rules forbid. **Cost:** revoking a device blocks
-synchronisation from it but does not end that browser's login session; see
-Known limitations in IMPLEMENTATION_PLAN.
+*Superseded in its mechanism by D-017; the principle stands.* Originally sync
+requests carried an `X-Device-Id` header and revocation did not end sessions,
+which the Milestone 1 review showed to be ineffective (finding H-01).
 
 ## D-010 No public sign-up, no invitation API yet
 Accounts and memberships are created by management commands. Who may create a
@@ -79,3 +79,88 @@ react-router-dom only. No UI or state-management library.
 ## D-016 Login rate limit uses the default in-process cache
 Enough for a single-process pilot. With several server processes the limit is
 per process; move the cache to Redis or the database before scaling out.
+
+## D-017 Sessions are bound to browser installations (review R5)
+Approved model, implemented as follows.
+
+- **`accounts.DeviceInstallation`**: one browser installation of one user.
+  The server recognises it by an HttpOnly identifier cookie (`mf_device`)
+  that is read **only at login, after the password check**. It is honoured
+  only if it names an active installation of the same user; otherwise a new
+  installation is created. It never authenticates a request.
+- **`accounts.UserSession`**: replaces Django's session table and adds `user`
+  and `installation` columns, so sessions can be found and ended by device.
+- The API accepts a session only if it is bound to an active installation
+  (`accounts.authentication.SessionAuthentication`). A session created any
+  other way, for example by the Django admin login, cannot call the API.
+- **`workspaces.WorkspaceDevice`**: authorisation of one installation in one
+  workspace, unique on the pair. Checked by the workspace guard on every
+  request, so revoking it closes the whole workspace to that browser, not
+  only synchronisation.
+- Revoking an installation deletes its sessions in the same transaction.
+- A revoked workspace device is never recreated for that installation.
+
+**Why an identifier cookie and not a stored secret or fingerprint:** a secret
+in IndexedDB would be a long-lived credential in script-readable storage;
+fingerprinting is unreliable and invasive. An HttpOnly cookie is unreadable to
+scripts and survives sign-out.
+**Cost:** clearing cookies makes a browser look new. See D-019 for what that
+does and does not weaken.
+
+## D-018 Workspace devices are authorised on first entry
+No owner approval was requested for now. The first request an installation
+makes to a workspace through an active membership creates its
+`WorkspaceDevice`. The explicit "register device" endpoint is gone, and the
+client no longer names its device: the server takes it from the session,
+which removes the spoofing in review finding V-01.
+
+## D-019 What revocation does and does not protect against
+Revocation defeats **possession of a browser without the password**: a lost
+or stolen phone, or a copied session. It does not defeat a person who knows
+the password; they can sign in again, and after clearing cookies their
+browser is a new installation that is authorised on first entry (D-018).
+Removing a *person* from a workspace is done by suspending or removing their
+membership, which no device or cookie can get around. Closing the remaining
+gap needs owner approval of new devices (O-020).
+
+## D-020 An installation belongs to its user, not to any workspace
+A workspace owner can revoke a member's **workspace device** but not the
+member's **installation**, because the installation also carries the user's
+access to other workspaces. Users revoke their own installations. This keeps
+one tenant from affecting a user's standing in another.
+
+## D-021 The SPA carries the workspace in its URL (review R3)
+Screens live under `/w/<workspace-id>/…`. The URL alone decides which
+workspace a tab shows; the shell is keyed by workspace so a switch discards
+all loaded state. Tabs are independent, links can be shared, and history
+works across a switch. The server-side "current workspace" is now only "last
+used", for redirecting `/`.
+
+## D-022 The workspace guard is structural (review R1)
+- `WorkspaceAPIView.get_permissions()` always returns `IsAuthenticated` and
+  `WorkspaceAccess` first; a subclass's `permission_classes` are appended.
+- A subclass that defines any of the guard's methods fails at import time.
+- A Django system check refuses to start if a route with a `workspace_id` is
+  not a `WorkspaceAPIView` or a handler declares no capability.
+- Tenant queries start from `self.workspace_queryset(Model)`; workspace-owned
+  models extend `WorkspaceOwnedModel`.
+- `tests/isolation.py` is a registry of every workspace endpoint. A test
+  fails if a route is missing from it, and every entry is run through the
+  isolation contract.
+
+## D-023 Services authorise on a re-read, locked actor (review R2)
+Every service that acts on behalf of a member calls `authorize_actor`, which
+re-reads the membership `FOR UPDATE` and checks membership status, workspace
+status, user status and capability. The membership object supplied by the
+caller is used only as an identifier. Domain errors live in
+`common/exceptions.py` with no framework imports and are mapped to HTTP only
+in `common/api_errors.py`; a test enforces that domain modules do not import
+the HTTP layer. **Cost:** one extra locked read per write, and operations by
+the same actor in one workspace run one at a time.
+
+## D-024 The `devices` app keeps no models
+Installations and sessions are identity (`accounts`); workspace device
+authorisation is tenant access control (`workspaces`), next to the guard that
+enforces it. This keeps dependencies one-directional. `apps.devices` retains
+its migration history and serves the device and sync endpoints. It can be
+folded away when migrations are squashed.

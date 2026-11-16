@@ -2,10 +2,9 @@
 
 import pytest
 from django.db import IntegrityError, transaction
-from rest_framework.exceptions import PermissionDenied
 
 from apps.audit.models import AuditEvent
-from apps.common.exceptions import ConflictError, DomainError
+from apps.common.exceptions import ConflictError, DomainError, NotPermittedError
 from apps.workspaces import services
 from apps.workspaces.models import (
     MembershipRole,
@@ -95,13 +94,13 @@ def test_add_member_cannot_create_a_second_owner(shop, make_user):
 @pytest.mark.parametrize("role", ["manager", "attendant", "affiliate"])
 def test_services_recheck_the_actors_authority(shop, make_user, role):
     actor = shop.by_role[role]
-    with pytest.raises(PermissionDenied):
+    with pytest.raises(NotPermittedError):
         services.add_member(actor=actor, user=make_user(), role=MembershipRole.AFFILIATE)
-    with pytest.raises(PermissionDenied):
+    with pytest.raises(NotPermittedError):
         services.change_member_role(
             actor=actor, membership_id=shop.attendant.id, role=MembershipRole.MANAGER
         )
-    with pytest.raises(PermissionDenied):
+    with pytest.raises(NotPermittedError):
         services.set_member_status(
             actor=actor, membership_id=shop.attendant.id, status=MembershipStatus.SUSPENDED
         )
@@ -146,7 +145,7 @@ def test_transfer_ownership_swaps_roles_atomically(shop):
 
 
 def test_transfer_ownership_guards(shop, other_shop):
-    with pytest.raises(DomainError):  # not the owner
+    with pytest.raises(NotPermittedError):  # not the owner
         services.transfer_ownership(actor=shop.manager, new_owner_id=shop.attendant.id)
     with pytest.raises(DomainError):  # other tenant's member
         services.transfer_ownership(actor=shop.owner, new_owner_id=other_shop.affiliate.id)

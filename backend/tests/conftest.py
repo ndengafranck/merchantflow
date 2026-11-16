@@ -4,7 +4,8 @@ import pytest
 from django.core.cache import cache
 from rest_framework.test import APIClient
 
-from apps.accounts.models import User
+from apps.accounts.models import DeviceInstallation, User
+from apps.accounts.session_store import INSTALLATION_SESSION_KEY
 from apps.workspaces.models import MembershipRole, WorkspaceMembership
 from apps.workspaces.services import create_workspace
 
@@ -46,14 +47,26 @@ def make_member(make_user):
     return _make
 
 
+def sign_in(client: APIClient, user: User, installation=None) -> DeviceInstallation:
+    """Give the client a session bound to a browser installation, as login does."""
+    if installation is None:
+        installation = DeviceInstallation.objects.create(user=user, label="Test browser")
+    client.force_login(user)
+    session = client.session
+    session[INSTALLATION_SESSION_KEY] = str(installation.pk)
+    session.save()
+    client.installation = installation
+    return installation
+
+
 @pytest.fixture
 def client_for():
-    """An API client signed in as the given user (CSRF checks off)."""
+    """An API client signed in as the given user on its own browser installation."""
 
     def _client(user: User | None = None) -> APIClient:
         client = APIClient()
         if user is not None:
-            client.force_login(user)
+            sign_in(client, user)
         return client
 
     return _client

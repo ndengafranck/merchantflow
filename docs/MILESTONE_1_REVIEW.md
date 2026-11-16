@@ -517,3 +517,35 @@ R1 to R4 are roughly a day of work. R5 is a decision, not code.
 **GO for Milestone 2 once R1 to R5 are done.** Do not start Milestone 2
 feature code before them. **NO-GO for a pilot with real users or real
 customer data** until the "before a pilot" list is complete.
+
+---
+
+## Status after the Milestone 1 corrections
+
+Added after the review. The text above is unchanged and describes commit
+`67f8586`. This table records what the corrections (R1 to R5) did to each
+finding. "Open" findings were outside R1 to R5 and are unchanged.
+
+| Finding | Status | Regression test or note |
+|---|---|---|
+| A-01 Guard by convention | **Fixed** (R1) | `test_architecture.py`, `test_isolation.py` |
+| A-02 Stale actor; domain depends on HTTP | **Fixed** (R2) | `test_actor_authorization.py`, `test_architecture.py::test_domain_modules_do_not_import_the_http_layer` |
+| A-03 Unscoped re-read; 403 versus 404 on revoke; 500 for unmapped method | **Fixed** | `test_devices.py::test_member_cannot_revoke_or_detect_someone_elses_device`, `test_architecture.py::test_capability_mapping_answers_405_for_unlisted_methods` |
+| A-04 Workspace not in the SPA URL | **Fixed** (R3) | `App.test.tsx`, `e2e/workspaces.spec.ts` |
+| H-01 Revocation does not stop the holder | **Fixed for a browser held without the password** (R5). A person who knows the password can still sign in on a new installation: DECISIONS D-019, OPEN_DECISIONS O-020 | `test_devices.py::test_revoked_browser_cannot_obtain_a_replacement_device`, `test_installations.py`, `e2e/devices.spec.ts` |
+| H-02 Login rate limiting | **Open** | Blocks a pilot |
+| S-01 Admin on the application origin | **Partly mitigated**: a session created by the admin login can no longer call the API. Unthrottled admin login and editable memberships remain | `test_installations.py::test_session_without_an_installation_is_not_accepted_by_the_api` |
+| S-02 Session lifetime and revocation | **Partly fixed** (R5): sessions record user and device and can be ended per device. Idle timeout, "sign out everywhere", scheduled purge and re-authentication remain | `test_installations.py` |
+| S-03 Insecure cookie settings deployable | **Open** | |
+| S-04 Account model details | **Open** | |
+| V-01 Device id can be claimed | **Fixed** (R5): the device comes from the session | `test_devices.py::test_client_cannot_choose_which_device_it_is` |
+| V-02 Device lifecycle gaps | **Partly fixed**: unlimited registration is gone (one device per installation per workspace). Devices are still not revoked when a membership ends (O-021); installations per user are uncapped (O-022) | `test_devices.py::test_first_entry_authorises_the_installation_once` |
+| D-01 "At least one owner" not enforced by the database | **Open** | |
+| D-02 Races surfacing as server errors | **Fixed for `add_member`** (the actor lock serialises it). `_unique_slug` unchanged | `test_concurrency.py::test_concurrent_add_member_never_surfaces_a_database_error` |
+| D-03 Audit trail incomplete and mutable | **Open** | Before Milestone 4 |
+| D-04 Smaller schema points | **Open** | |
+| T-01 Evidence not reproducible | **Partly fixed** (R4): browser suite committed, Compose verified. **Remote CI still not run** | `frontend/e2e/` |
+| T-02 Missing test categories | **Mostly fixed**: route coverage, concurrency, session lifecycle and isolation contract are in the suite. Management commands, admin and production-settings tests remain | |
+| P-01 PWA metadata | **Open** | |
+| O-01 No deployment path | **Open** | Blocks a pilot |
+| O-02 Frontend robustness | **Partly fixed**: sign-out errors are shown. Error boundary and membership refresh remain | |

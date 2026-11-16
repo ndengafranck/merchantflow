@@ -2,7 +2,7 @@ import { useState } from "react";
 import { Link, NavLink, Outlet } from "react-router-dom";
 import { errorMessage } from "../api/client";
 import type { Membership, User } from "../api/types";
-import { useSession } from "../session/SessionContext";
+import { useSession, workspacePath } from "../session/SessionContext";
 
 const ROLE_LABELS: Record<Membership["role"], string> = {
   owner: "Owner",
@@ -68,7 +68,12 @@ export function AppShell({ user, membership, canSwitchWorkspace }: Props) {
       </header>
 
       <nav id="primary-nav" className={navOpen ? "sidebar sidebar-open" : "sidebar"}>
-        <NavLink to="/" end className="nav-link" onClick={() => setNavOpen(false)}>
+        <NavLink
+          to={workspacePath(membership.workspace.id)}
+          end
+          className="nav-link"
+          onClick={() => setNavOpen(false)}
+        >
           Dashboard
         </NavLink>
         {canSwitchWorkspace && (
@@ -84,7 +89,7 @@ export function AppShell({ user, membership, canSwitchWorkspace }: Props) {
             Could not sign out: {signOutError}
           </p>
         )}
-        <Outlet />
+        <Outlet context={membership} />
       </main>
     </div>
   );

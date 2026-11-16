@@ -94,11 +94,16 @@ AUTH_PASSWORD_VALIDATORS = [
 # HttpOnly cookie. JavaScript can never read the session identifier; it only
 # reads the CSRF token, which is useless without the session cookie.
 SECURE_COOKIES = env.bool("DJANGO_SECURE_COOKIES", default=not DEBUG)
+SESSION_ENGINE = "apps.accounts.session_store"  # sessions know their user and device
 SESSION_COOKIE_NAME = "mf_session"
 SESSION_COOKIE_HTTPONLY = True
 SESSION_COOKIE_SECURE = SECURE_COOKIES
 SESSION_COOKIE_SAMESITE = "Lax"
 SESSION_COOKIE_AGE = 60 * 60 * 24 * 14
+# Identifies the browser installation across logins. An identifier, not a
+# credential: it is only read at login, after the password has been verified.
+DEVICE_COOKIE_NAME = "mf_device"
+DEVICE_COOKIE_AGE = 60 * 60 * 24 * 400
 CSRF_COOKIE_NAME = "mf_csrftoken"
 CSRF_COOKIE_HTTPONLY = False  # the SPA echoes it in the X-CSRFToken header
 CSRF_COOKIE_SECURE = SECURE_COOKIES
@@ -119,13 +124,13 @@ if env.bool("DJANGO_BEHIND_TLS_PROXY", default=False):
 API_DOCS_ENABLED = env.bool("API_DOCS_ENABLED", default=DEBUG)
 
 REST_FRAMEWORK = {
-    "DEFAULT_AUTHENTICATION_CLASSES": ["apps.common.authentication.SessionAuthentication"],
+    "DEFAULT_AUTHENTICATION_CLASSES": ["apps.accounts.authentication.SessionAuthentication"],
     # Deny by default: a view must opt out explicitly to be public.
     "DEFAULT_PERMISSION_CLASSES": ["rest_framework.permissions.IsAuthenticated"],
     "DEFAULT_RENDERER_CLASSES": ["rest_framework.renderers.JSONRenderer"],
     "DEFAULT_PARSER_CLASSES": ["rest_framework.parsers.JSONParser"],
     "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
-    "EXCEPTION_HANDLER": "apps.common.exceptions.api_exception_handler",
+    "EXCEPTION_HANDLER": "apps.common.api_errors.api_exception_handler",
     "DEFAULT_THROTTLE_RATES": {"login": env.str("LOGIN_THROTTLE_RATE", default="10/min")},
     "TEST_REQUEST_DEFAULT_FORMAT": "json",
 }
@@ -139,7 +144,8 @@ SPECTACULAR_SETTINGS = {
     "ENUM_NAME_OVERRIDES": {
         "WorkspaceStatusEnum": "apps.workspaces.models.WorkspaceStatus",
         "MembershipStatusEnum": "apps.workspaces.models.MembershipStatus",
-        "DeviceStatusEnum": "apps.devices.models.DeviceStatus",
+        # Installations and workspace devices share the active/revoked choice set.
+        "DeviceStatusEnum": "apps.workspaces.models.WorkspaceDeviceStatus",
     },
 }
 

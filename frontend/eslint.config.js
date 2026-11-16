@@ -4,7 +4,7 @@ import globals from "globals";
 import tseslint from "typescript-eslint";
 
 export default tseslint.config(
-  { ignores: ["dist", "coverage"] },
+  { ignores: ["dist", "coverage", "test-results", "playwright-report"] },
   js.configs.recommended,
   ...tseslint.configs.recommended,
   reactHooks.configs.flat.recommended,
@@ -19,5 +19,10 @@ export default tseslint.config(
         { name: "sessionStorage", message: "Do not persist data in sessionStorage." },
       ],
     },
+  },
+  {
+    // The browser tests read web storage only to assert that it is empty.
+    files: ["e2e/**"],
+    rules: { "no-restricted-globals": "off" },
   },
 );
