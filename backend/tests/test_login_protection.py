@@ -277,3 +277,206 @@ def test_the_limit_is_shared_between_separate_processes(make_user):
     second = run(4)
     assert first == [401] * (PAIR - 2)
     assert second == [401, 401, 429, 429]
+
+
+# --- C4: denial-of-service resistance -----------------------------------------------------
+
+KNOWN = LIMITS["KNOWN_BROWSER"]
+
+
+def known_browser(user, ip="198.51.100.7"):
+    """A browser that has signed in to ``user`` before and then signed out:
+    it still carries the account's device cookie, but no session."""
+    browser = APIClient(REMOTE_ADDR=ip)
+    assert browser.post(LOGIN, {"email": user.email, "password": PASSWORD}).status_code == 200
+    assert browser.post("/api/v1/auth/logout/").status_code == 204
+    assert settings.DEVICE_COOKIE_NAME in browser.cookies
+    return browser
+
+
+def sign(browser, user, password=PASSWORD):
+    return browser.post(LOGIN, {"email": user.email, "password": password})
+
+
+def exhaust_address(ip):
+    for i in range(ADDRESS):
+        attempt(f"spray{i}@example.test", "Password123!", ip=ip)
+    assert attempt("one-more@example.test", "Password123!", ip=ip).status_code == 429
+
+
+def test_hostile_user_on_a_shared_address_cannot_lock_out_regular_users(make_user):
+    """Review C4: one user spraying from shop Wi-Fi blocked everyone there."""
+    shop_ip = "102.244.0.10"
+    staff = [make_user() for _ in range(5)]
+    browsers = [known_browser(user, ip=shop_ip) for user in staff]
+    exhaust_address(shop_ip)
+    for user, browser in zip(staff, browsers, strict=True):
+        assert sign(browser, user).status_code == 200
+    # Residual cost, by design: a browser never used for that account, on the
+    # attacked address, waits for the window to end.
+    newcomer = make_user()
+    assert attempt(newcomer.email, PASSWORD, ip=shop_ip).status_code == 429
+
+
+def test_distributed_guessing_cannot_lock_the_owner_out_of_their_own_browser(make_user):
+    victim = make_user()
+    usual = known_browser(victim)
+    for i in range(ACCOUNT):
+        attempt(victim.email, "wrong", ip=f"203.0.113.{i}")
+    assert attempt(victim.email, PASSWORD, ip="203.0.113.200").status_code == 429  # attacker
+    assert sign(usual, victim).status_code == 200  # the owner, on their browser
+
+
+def test_a_known_browser_still_gets_only_a_few_guesses(make_user):
+    victim = make_user()
+    stolen = known_browser(victim)
+    for _ in range(KNOWN):
+        assert sign(stolen, victim, "guess").status_code == 401
+    assert sign(stolen, victim).status_code == 429  # even the right password, until the window ends
+    # Its failures were not charged to the account: other browsers are unaffected.
+    assert attempt(victim.email, PASSWORD, ip="198.51.100.88").status_code == 200
+
+
+@pytest.mark.parametrize("cookie", ["not-a-uuid", "random", "other_users", "revoked"])
+def test_only_a_genuine_active_device_cookie_of_this_account_counts(make_user, cookie):
+    import uuid
+
+    from apps.accounts import installations
+    from apps.accounts.models import DeviceInstallation
+
+    victim, other = make_user(), make_user()
+    for i in range(ACCOUNT):
+        attempt(victim.email, "wrong", ip=f"203.0.113.{i}")
+    value = {"not-a-uuid": "x", "random": str(uuid.uuid4())}.get(cookie)
+    if cookie == "other_users":
+        value = str(DeviceInstallation.objects.create(user=other, label="other").pk)
+    if cookie == "revoked":
+        mine = DeviceInstallation.objects.create(user=victim, label="old")
+        installations.revoke_installation(user=victim, installation_id=mine.pk)
+        value = str(mine.pk)
+    browser = APIClient(REMOTE_ADDR="198.51.100.150")
+    browser.cookies[settings.DEVICE_COOKIE_NAME] = value
+    assert sign(browser, victim).status_code == 429  # treated as an unknown browser
+
+
+def test_a_shared_phone_is_known_only_for_the_last_account_used_on_it(make_user):
+    first, second = make_user(), make_user()
+    phone = known_browser(first)
+    known_browser(second)  # a different browser
+    for i in range(ACCOUNT):
+        attempt(second.email, "wrong", ip=f"203.0.113.{i}")
+    assert sign(phone, second).status_code == 429  # phone's cookie belongs to `first`
+    assert sign(phone, first).status_code == 200
+
+
+def test_success_on_a_known_browser_forgives_its_typing_mistakes(make_user):
+    user = make_user()
+    browser = known_browser(user)
+    for _ in range(KNOWN - 1):
+        sign(browser, user, "typo")
+    assert sign(browser, user).status_code == 200
+    browser.post("/api/v1/auth/logout/")
+    for _ in range(KNOWN - 1):
+        assert sign(browser, user, "typo").status_code == 401
+    assert sign(browser, user).status_code == 200
+
+
+def test_a_refused_attempt_leaves_every_counter_as_it_was(make_user):
+    user = make_user()
+    for _ in range(PAIR):
+        attempt(user.email, "wrong")
+    before = dict(LoginAttemptBucket.objects.values_list("key", "failures"))
+    assert attempt(user.email, PASSWORD).status_code == 429
+    assert dict(LoginAttemptBucket.objects.values_list("key", "failures")) == before
+
+
+# --- Recovery ---------------------------------------------------------------------------
+
+
+def test_operator_can_clear_a_lock_and_it_is_audited(make_user):
+    from django.core.management import call_command
+
+    victim = make_user()
+    for i in range(ACCOUNT):
+        attempt(victim.email, "wrong", ip=f"203.0.113.{i}")
+    assert attempt(victim.email, PASSWORD, ip="198.51.100.66").status_code == 429
+
+    call_command("clear_login_limits", email=victim.email.upper(), reason="Ticket 42, ID checked")
+
+    assert attempt(victim.email, PASSWORD, ip="198.51.100.66").status_code == 200
+    event = AuditEvent.objects.get(action="auth.login_limits_cleared", target_id=victim.id)
+    assert event.metadata["reason"] == "Ticket 42, ID checked"
+    assert event.metadata["counters_removed"] >= 1
+
+
+def test_clearing_needs_a_known_account_and_a_reason(make_user):
+    from django.core.management import call_command
+    from django.core.management.base import CommandError
+
+    with pytest.raises(CommandError):
+        call_command("clear_login_limits", email="ghost@example.test", reason="x")
+    with pytest.raises(CommandError):
+        call_command("clear_login_limits", email=make_user().email, reason="   ")
+
+
+def test_there_is_no_unlock_endpoint():
+    from django.urls import Resolver404, resolve
+
+    for path in ("/api/v1/auth/unlock/", "/api/v1/auth/login-limits/"):
+        with pytest.raises(Resolver404):
+            resolve(path)
+
+
+# --- Concurrency of the combined statements ---------------------------------------------
+
+
+@pytest.mark.django_db(transaction=True)
+def test_distributed_concurrent_guesses_cannot_exceed_the_account_limit(make_user):
+    victim = make_user()
+    total = ACCOUNT * 2
+    results, barrier = [], threading.Barrier(total)
+
+    def guess(i):
+        try:
+            barrier.wait()
+            results.append(attempt(victim.email, "wrong", ip=f"203.0.113.{i}").status_code)
+        finally:
+            connection.close()
+
+    threads = [threading.Thread(target=guess, args=(i,)) for i in range(total)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=60)
+    assert sorted(results) == [401] * ACCOUNT + [429] * ACCOUNT
+
+
+@pytest.mark.django_db(transaction=True)
+def test_overlapping_buckets_under_concurrency_never_deadlock(make_user):
+    """Mixed accounts, addresses, successes and failures at once: the
+    reservation and refund statements lock in key order, so no deadlock."""
+    users = [make_user() for _ in range(4)]
+    errors, barrier = [], threading.Barrier(24)
+
+    def worker(n):
+        try:
+            barrier.wait()
+            for k in range(6):
+                user = users[(n + k) % 4]
+                password = PASSWORD if (n + k) % 3 == 0 else "wrong"
+                status = attempt(user.email, password, ip=f"198.51.100.{(n * k) % 5}").status_code
+                if status not in (200, 401, 429):
+                    errors.append(status)
+        except Exception as exc:  # noqa: BLE001 - any database error is the finding
+            errors.append(repr(exc))
+        finally:
+            connection.close()
+
+    threads = [threading.Thread(target=worker, args=(n,)) for n in range(24)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=120)
+    assert not any(t.is_alive() for t in threads)
+    assert errors == []
+    assert not LoginAttemptBucket.objects.filter(failures__lt=0).exists()

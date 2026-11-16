@@ -1,3 +1,4 @@
+from django.conf import settings
 from django.contrib.auth import authenticate, login, logout
 from django.utils.decorators import method_decorator
 from django.views.decorators.cache import never_cache
@@ -72,7 +73,11 @@ class TooManyAttempts(Throttled):
 def guarded_attempt(request, identifier: str) -> login_protection.Attempt:
     """Reserve a sign-in attempt, or refuse it before the password is checked."""
     attempt = login_protection.begin_attempt(
-        identifier=identifier, address=address_bucket(client_ip(request))
+        identifier=identifier,
+        address=address_bucket(client_ip(request)),
+        installation_id=login_protection.recognised_installation(
+            identifier, request.COOKIES.get(settings.DEVICE_COOKIE_NAME)
+        ),
     )
     if attempt.blocked:
         raise TooManyAttempts(

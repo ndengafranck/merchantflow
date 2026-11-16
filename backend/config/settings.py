@@ -158,6 +158,9 @@ LOGIN_PROTECTION = {
     "ACCOUNT_AND_ADDRESS": env.int("LOGIN_MAX_FAILURES_ACCOUNT_ADDRESS", default=5),
     "ACCOUNT": env.int("LOGIN_MAX_FAILURES_ACCOUNT", default=20),
     "ADDRESS": env.int("LOGIN_MAX_FAILURES_ADDRESS", default=100),
+    # A browser that already signed in to the account (device cookie) has only
+    # this limit, and is not blocked by the account or address limits above.
+    "KNOWN_BROWSER": env.int("LOGIN_MAX_FAILURES_KNOWN_BROWSER", default=10),
 }
 
 # --- Django admin ------------------------------------------------------------
